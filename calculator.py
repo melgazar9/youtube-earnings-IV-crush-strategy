@@ -81,7 +81,7 @@ def build_term_structure(days, ivs):
     return term_spline
 
 def get_current_price(df_price_history):
-    return df_price_history['Close'].iloc[0]
+    return df_price_history['Close'].iloc[-1]
 
 
 def calc_kelly_bet(
