@@ -1,9 +1,20 @@
+"""
+DISCLAIMER: 
+
+This software is provided solely for educational and research purposes. 
+It is not intended to provide investment advice, and no investment recommendations are made herein. 
+The developers are not financial advisors and accept no responsibility for any financial decisions or losses resulting from the use of this software. 
+Always consult a professional financial advisor before making any investment decisions.
+"""
+
+
+import FreeSimpleGUI as sg
 import yfinance as yf
 from datetime import datetime, timedelta
 from scipy.interpolate import interp1d
 import numpy as np
 import threading
-import argparse
+
 
 def filter_dates(dates):
     today = datetime.today().date()
@@ -53,13 +64,14 @@ def yang_zhang(price_data, window=30, trading_periods=252, return_last_only=True
         center=False
     ).sum() * (1.0 / (window - 1.0))
 
-    k = 0.3333 / (1.3333 + ((window + 1) / (window - 1)) )
+    k = 0.34 / (1.34 + ((window + 1) / (window - 1)) )
     result = (open_vol + k * close_vol + (1 - k) * window_rs).apply(np.sqrt) * np.sqrt(trading_periods)
 
     if return_last_only:
         return result.iloc[-1]
     else:
         return result.dropna()
+    
 
 def build_term_structure(days, ivs):
     days = np.array(days)
@@ -68,6 +80,7 @@ def build_term_structure(days, ivs):
     sort_idx = days.argsort()
     days = days[sort_idx]
     ivs = ivs[sort_idx]
+
 
     spline = interp1d(days, ivs, kind='linear', fill_value="extrapolate")
 
@@ -78,59 +91,14 @@ def build_term_structure(days, ivs):
             return ivs[-1]
         else:  
             return float(spline(dte))
+
     return term_spline
 
-def get_current_price(df_price_history):
-    return df_price_history['Close'].iloc[0]
+def get_current_price(ticker):
+    todays_data = ticker.history(period='1d')
+    return todays_data['Close'][0]
 
-
-def calc_kelly_bet(
-    p_win: float = 0.66,
-    odds_decimal: float = 1.66,
-    current_bankroll: float = 10000,
-    pct_kelly=0.10
-) -> float:
-    """
-    Calculates the Kelly Criterion optimal bet amount.
-
-    The Kelly Criterion is a formula used to determine the optimal size of a series
-    of bets to maximize the long-term growth rate of a bankroll.
-
-    Args:
-        p_win: The estimated probability of winning the bet (p),
-                                a float between 0 and 1.
-        odds_decimal: The decimal odds (b), where a successful $1 bet returns $b.
-                      For example, if odds are 2:1, odds_decimal is 3.0.
-                      If odds are 1:1, odds_decimal is 2.0.
-                      This is (payout / stake) + 1.
-        current_bankroll: The total amount of money available to bet (B).
-
-    Returns:
-        The calculated optimal bet amount. Returns 0 if the bet is not favorable
-        (i.e., the calculated fraction is negative or zero), or if inputs are invalid.
-    """
-    if not (0 <= p_win <= 1):
-        raise ValueError("Probability of winning must be between 0 and 1.")
-    if odds_decimal <= 1.0: # Odds must be greater than 1.0 (e.g., 1.01 for a tiny profit)
-        raise ValueError("Decimal odds must be greater than 1.0 (e.g., 1.01 for a winning bet).")
-    if current_bankroll <= 0:
-        raise ValueError("Current bankroll must be a positive number.")
-
-    b_kelly = odds_decimal - 1.0
-
-    if b_kelly <= 0: # Should be caught by odds_decimal check, but as a safeguard
-        return 0.0
-
-    kelly_fraction = p_win - ((1 - p_win) / b_kelly)
-
-    if kelly_fraction <= 0:
-        return 0.0
-
-    bet_amount = kelly_fraction * current_bankroll
-    bet_amount = bet_amount * pct_kelly
-    return round(bet_amount, 2)
-
-def compute_recommendation(ticker, min_avg_30d_volume=1500000, min_iv30_rv30=2.0, max_ts_slope_0_45=-0.0075):
+def compute_recommendation(ticker):
     try:
         ticker = ticker.strip().upper()
         if not ticker:
@@ -152,12 +120,9 @@ def compute_recommendation(ticker, min_avg_30d_volume=1500000, min_iv30_rv30=2.0
         options_chains = {}
         for exp_date in exp_dates:
             options_chains[exp_date] = stock.option_chain(exp_date)
-
-        df_price_history = stock.history(period='3mo')
-        df_price_history = df_price_history.sort_index()
         
         try:
-            underlying_price = get_current_price(df_price_history)
+            underlying_price = get_current_price(stock)
             if underlying_price is None:
                 raise ValueError("No market price found.")
         except Exception:
@@ -221,54 +186,101 @@ def compute_recommendation(ticker, min_avg_30d_volume=1500000, min_iv30_rv30=2.0
         
         ts_slope_0_45 = (term_spline(45) - term_spline(dtes[0])) / (45-dtes[0])
         
-        iv30_rv30 = term_spline(30) / yang_zhang(df_price_history)
+        price_history = stock.history(period='3mo')
+        iv30_rv30 = term_spline(30) / yang_zhang(price_history)
 
-        avg_volume = df_price_history['Volume'].rolling(30).mean().dropna().iloc[-1]
+        avg_volume = price_history['Volume'].rolling(30).mean().dropna().iloc[-1]
 
-        expected_move = str(round(straddle / underlying_price * 100, 2)) + "%" if straddle else None
+        expected_move = str(round(straddle / underlying_price * 100,2)) + "%" if straddle else None
 
-        result_summary = {
-            'avg_volume': round(avg_volume, 3),
-            'avg_volume_pass': avg_volume >= min_avg_30d_volume,
-            'iv30_rv30': round(iv30_rv30, 3),
-            'iv30_rv30_pass': iv30_rv30 >= min_iv30_rv30,
-            'ts_slope_0_45': ts_slope_0_45,
-            'ts_slope_0_45_pass': ts_slope_0_45 <= max_ts_slope_0_45,
-            'expected_move': expected_move
-        }
-        
-        if result_summary['avg_volume_pass'] and result_summary['iv30_rv30_pass'] and result_summary['ts_slope_0_45_pass']:
-            suggestion = "Recommended"
-        elif result_summary['ts_slope_0_45_pass'] and ((result_summary['avg_volume_pass'] and not result_summary['iv30_rv30_pass']) or (result_summary['iv30_rv30_pass'] and not result_summary['avg_volume_pass'])):
-            suggestion = "Consider"
-        else:
-            suggestion = "Avoid"
-
-        result_summary["suggestion"] = suggestion
-
-        if suggestion == "Recommended":
-            kelly_bet = calc_kelly_bet()
-        elif suggestion == "Consider":
-            kelly_bet = calc_kelly_bet(p_win=0.33)
-        else:
-            kelly_bet = 0
-
-        result_summary["kelly_bet"] = kelly_bet
-        
-        # Check that they are in our desired range (see video)
-        return result_summary
-    
+        return {'avg_volume': avg_volume >= 1500000, 'iv30_rv30': iv30_rv30 >= 1.25, 'ts_slope_0_45': ts_slope_0_45 <= -0.00406, 'expected_move': expected_move} #Check that they are in our desired range (see video)
     except Exception as e:
         raise Exception(f'Error occured processing')
+        
 
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Run calculations for given tickers")
-    parser.add_argument('--tickers', nargs='+', required=True, help='List of ticker symbols (e.g., NVDA AAPL TSLA)')
     
-    args = parser.parse_args()
-    tickers = args.tickers
 
-    for ticker in tickers:
-        result = compute_recommendation(ticker)
-        print(f"ticker: {ticker}: {result}")
+def main_gui():
+    main_layout = [
+        [sg.Text("Enter Stock Symbol:"), sg.Input(key="stock", size=(20, 1), focus=True)],
+        [sg.Button("Submit", bind_return_key=True), sg.Button("Exit")],
+        [sg.Text("", key="recommendation", size=(50, 1))]
+    ]
+    
+    window = sg.Window("Earnings Position Checker", main_layout)
+    
+    while True:
+        event, values = window.read()
+        if event in (sg.WINDOW_CLOSED, "Exit"):
+            break
+
+        if event == "Submit":
+            window["recommendation"].update("")
+            stock = values.get("stock", "")
+
+            loading_layout = [[sg.Text("Loading...", key="loading", justification="center")]]
+            loading_window = sg.Window("Loading", loading_layout, modal=True, finalize=True, size=(275, 200))
+
+            result_holder = {}
+
+            def worker():
+                try:
+                    result = compute_recommendation(stock)
+                    result_holder['result'] = result
+                except Exception as e:
+                    result_holder['error'] = str(e)
+
+            thread = threading.Thread(target=worker, daemon=True)
+            thread.start()
+
+            while thread.is_alive():
+                event_load, _ = loading_window.read(timeout=100)
+                if event_load == sg.WINDOW_CLOSED:
+                    break
+            thread.join(timeout=1)
+
+            if 'error' in result_holder:
+                loading_window.close()
+                window["recommendation"].update(f"Error: {result_holder['error']}")
+            elif 'result' in result_holder:
+                loading_window.close()
+                result = result_holder['result']
+
+                avg_volume_bool    = result['avg_volume']
+                iv30_rv30_bool     = result['iv30_rv30']
+                ts_slope_bool      = result['ts_slope_0_45']
+                expected_move      = result['expected_move']
+                
+                if avg_volume_bool and iv30_rv30_bool and ts_slope_bool:
+                    title = "Recommended"
+                    title_color = "#006600"
+                elif ts_slope_bool and ((avg_volume_bool and not iv30_rv30_bool) or (iv30_rv30_bool and not avg_volume_bool)):
+                    title = "Consider"
+                    title_color = "#ff9900"
+                else:
+                    title = "Avoid"
+                    title_color = "#800000"
+                
+                result_layout = [
+                    [sg.Text(title, text_color=title_color, font=("Helvetica", 16))],
+                    [sg.Text(f"avg_volume: {'PASS' if avg_volume_bool else 'FAIL'}", text_color="#006600" if avg_volume_bool else "#800000")],
+                    [sg.Text(f"iv30_rv30: {'PASS' if iv30_rv30_bool else 'FAIL'}", text_color="#006600" if iv30_rv30_bool else "#800000")],
+                    [sg.Text(f"ts_slope_0_45: {'PASS' if ts_slope_bool else 'FAIL'}", text_color="#006600" if ts_slope_bool else "#800000")],
+                    [sg.Text(f"Expected Move: {expected_move}", text_color="blue")],
+                    [sg.Button("OK")]
+                ]
+                
+                result_window = sg.Window("Recommendation", result_layout, modal=True, finalize=True, size=(275, 200))
+                while True:
+                    event_result, _ = result_window.read(timeout=100)
+                    if event_result in (sg.WINDOW_CLOSED, "OK"):
+                        break
+                result_window.close()
+    
+    window.close()
+
+def gui():
+    main_gui()
+
+if __name__ == "__main__":
+    gui()
