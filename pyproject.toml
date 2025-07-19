@@ -1,0 +1,23 @@
+[project]
+name = "youtube-option-quant-trade-screener"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "melgazar9",email = "melgazar9@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy (>=2.2.6,<3.0.0)",
+    "yfinance (>=0.2.61,<0.3.0)",
+    "scipy (>=1.15.3,<2.0.0)",
+    "notebook (>=7.4.4,<8.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+package-mode = false
