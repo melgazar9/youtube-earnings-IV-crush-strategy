@@ -16,3 +16,5 @@ https://docs.google.com/document/d/1_7UoFIqrTftoz-PJ0rxkttMc24inrAbWuZSbbOV-Jwk/
 Trade Tracker Template:
 https://docs.google.com/spreadsheets/d/1z_PMFqmV_2XqlCcCAdA4wgxqDg0Ym7iSeygNRpsnpO8/edit?gid=0#gid=0
 Go to file and make a copy or download it for excel (only tested in google sheets)
+
+YouTube link: https://www.youtube.com/watch?v=oW6MHjzxHpU
