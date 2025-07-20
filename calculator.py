@@ -138,12 +138,12 @@ def compute_recommendation(ticker, min_avg_30d_volume=1500000, min_iv30_rv30=2.0
         
         try:
             stock = yf.Ticker(ticker)
-            if len(stock.options) == 0:
-                raise KeyError()
+            exp_dates = list(stock.options)
+            if len(exp_dates) == 0:
+                raise KeyError(f"No options data found for ticker {ticker}")
         except KeyError:
             return f"Error: No options found for stock symbol '{ticker}'."
         
-        exp_dates = list(stock.options)
         try:
             exp_dates = filter_dates(exp_dates)
         except:
