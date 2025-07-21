@@ -135,7 +135,7 @@ def calc_kelly_bet(
     return round(bet_amount, 2)
 
 
-def compute_recommendation(ticker, min_avg_30d_volume=1500000, min_iv30_rv30=1.25, max_ts_slope_0_45=-0.00406):
+def compute_recommendation(ticker, min_avg_30d_volume=1500000, min_iv30_rv30=1.5, max_ts_slope_0_45=-0.00500):
     try:
         ticker = ticker.strip().upper()
         if not ticker:
