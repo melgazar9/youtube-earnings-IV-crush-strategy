@@ -310,6 +310,9 @@ def compute_recommendation(
             kelly_multiplier_from_base = 1.25
         elif result_summary["ts_slope_0_45"] < -0.0075:
             kelly_multiplier_from_base = 1.1
+        else result_summary["ts_slope_0_45"] < -0.0075:
+            kelly_multiplier_from_base = 1
+    elif suggestion == "Consider":
     elif suggestion == "Consider":
         kelly_multiplier_from_base = 0.20
     elif suggestion == "Avoid":
