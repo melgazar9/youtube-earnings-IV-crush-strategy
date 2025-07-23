@@ -2,11 +2,8 @@ import yfinance as yf
 from datetime import datetime, timedelta
 from scipy.interpolate import interp1d
 import numpy as np
+import threading
 import argparse
-import warnings
-import pandas as pd
-import os
-import requests
 
 
 def filter_dates(dates):
@@ -18,7 +15,7 @@ def filter_dates(dates):
     arr = []
     for i, date in enumerate(sorted_dates):
         if date >= cutoff_date:
-            arr = [d.strftime("%Y-%m-%d") for d in sorted_dates[: i + 1]]
+            arr = [d.strftime("%Y-%m-%d") for d in sorted_dates[:i + 1]]
             break
 
     if len(arr) > 0:
@@ -30,23 +27,32 @@ def filter_dates(dates):
 
 
 def yang_zhang(price_data, window=30, trading_periods=252, return_last_only=True):
-    log_ho = (price_data["High"] / price_data["Open"]).apply(np.log)
-    log_lo = (price_data["Low"] / price_data["Open"]).apply(np.log)
-    log_co = (price_data["Close"] / price_data["Open"]).apply(np.log)
+    log_ho = (price_data['High'] / price_data['Open']).apply(np.log)
+    log_lo = (price_data['Low'] / price_data['Open']).apply(np.log)
+    log_co = (price_data['Close'] / price_data['Open']).apply(np.log)
 
-    log_oc = (price_data["Open"] / price_data["Close"].shift(1)).apply(np.log)
-    log_oc_sq = log_oc**2
+    log_oc = (price_data['Open'] / price_data['Close'].shift(1)).apply(np.log)
+    log_oc_sq = log_oc ** 2
 
-    log_cc = (price_data["Close"] / price_data["Close"].shift(1)).apply(np.log)
-    log_cc_sq = log_cc**2
+    log_cc = (price_data['Close'] / price_data['Close'].shift(1)).apply(np.log)
+    log_cc_sq = log_cc ** 2
 
     rs = log_ho * (log_ho - log_co) + log_lo * (log_lo - log_co)
 
-    close_vol = log_cc_sq.rolling(window=window, center=False).sum() * (1.0 / (window - 1.0))
+    close_vol = log_cc_sq.rolling(
+        window=window,
+        center=False
+    ).sum() * (1.0 / (window - 1.0))
 
-    open_vol = log_oc_sq.rolling(window=window, center=False).sum() * (1.0 / (window - 1.0))
+    open_vol = log_oc_sq.rolling(
+        window=window,
+        center=False
+    ).sum() * (1.0 / (window - 1.0))
 
-    window_rs = rs.rolling(window=window, center=False).sum() * (1.0 / (window - 1.0))
+    window_rs = rs.rolling(
+        window=window,
+        center=False
+    ).sum() * (1.0 / (window - 1.0))
 
     k = 0.3333 / (1.3333 + ((window + 1) / (window - 1)))
     result = (open_vol + k * close_vol + (1 - k) * window_rs).apply(np.sqrt) * np.sqrt(trading_periods)
@@ -61,20 +67,11 @@ def build_term_structure(days, ivs):
     days = np.array(days)
     ivs = np.array(ivs)
 
-    # Sort by days
     sort_idx = days.argsort()
     days = days[sort_idx]
     ivs = ivs[sort_idx]
 
-    _, unique_idx = np.unique(days, return_index=True)
-    days = days[sorted(unique_idx)]
-    ivs = ivs[sorted(unique_idx)]
-
-    if len(days) < 2:
-        warnings.warn(f"Not enough unique days to interpolate for ticker {ticker}.")
-        return
-
-    spline = interp1d(days, ivs, kind="linear", fill_value="extrapolate")
+    spline = interp1d(days, ivs, kind='linear', fill_value="extrapolate")
 
     def term_spline(dte):
         if dte < days[0]:
@@ -88,10 +85,15 @@ def build_term_structure(days, ivs):
 
 
 def get_current_price(df_price_history):
-    return df_price_history["Close"].iloc[-1]
+    return df_price_history['Close'].iloc[-1]
 
 
-def calc_kelly_bet(p_win: float = 0.66, odds_decimal: float = 1.66, current_bankroll: float = 10000, pct_kelly=0.10) -> float:
+def calc_kelly_bet(
+        p_win: float = 0.66,
+        odds_decimal: float = 1.66,
+        current_bankroll: float = 10000,
+        pct_kelly=0.10
+) -> float:
     """
     Calculates the Kelly Criterion optimal bet amount.
 
@@ -133,41 +135,7 @@ def calc_kelly_bet(p_win: float = 0.66, odds_decimal: float = 1.66, current_bank
     return round(bet_amount, 2)
 
 
-def get_all_usa_tickers(use_yf_db=True):
-    todays_date = datetime.today().strftime("%Y-%m-%d")
-
-    ### FMP ###
-
-    fmp_apikey = os.getenv("FMP_API_KEY")
-    fmp_url = (
-        f"https://financialmodelingprep.com/api/v3/earning_calendar?from={todays_date}&to={todays_date}&apikey={fmp_apikey}"
-    )
-    fmp_response = requests.get(fmp_url)
-    df_fmp = pd.DataFrame(fmp_response.json())
-    df_fmp_usa = df_fmp[df_fmp["symbol"].str.fullmatch(r"[A-Z]{1,4}") & ~df_fmp["symbol"].str.contains(r"[.-]")]
-
-    fmp_usa_symbols = sorted(df_fmp_usa["symbol"].unique().tolist())
-
-    ### NASDAQ ###
-
-    nasdaq_url = f"https://api.nasdaq.com/api/calendar/earnings?date={todays_date}"
-    nasdaq_headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-    nasdaq_response = requests.get(nasdaq_url, headers=nasdaq_headers)
-    nasdaq_calendar = nasdaq_response.json().get("data").get("rows")
-    df_nasdaq = pd.DataFrame(nasdaq_calendar)
-    nasdaq_tickers = sorted(df_nasdaq["symbol"].unique().tolist())
-
-    all_usa_earnings_tickers_today = sorted(list(set(fmp_usa_symbols + nasdaq_tickers)))
-    return all_usa_earnings_tickers_today
-
-
-def compute_recommendation(
-    ticker,
-    min_avg_30d_dollar_volume=10_000_000,
-    min_avg_30d_share_volume=1_500_000,
-    min_iv30_rv30=1.5,
-    max_ts_slope_0_45=-0.00500,
-):
+def compute_recommendation(ticker, min_avg_30d_volume=1500000, min_iv30_rv30=1.5, max_ts_slope_0_45=-0.00500):
     ticker = ticker.strip().upper()
     if not ticker:
         return "No stock symbol provided."
@@ -182,16 +150,15 @@ def compute_recommendation(
 
     try:
         exp_dates = filter_dates(exp_dates)
-    except Exception:
+    except:
         return "Error: Not enough option data."
 
     options_chains = {}
     for exp_date in exp_dates:
         options_chains[exp_date] = stock.option_chain(exp_date)
 
-    df_price_history = stock.history(period="3mo")
+    df_price_history = stock.history(period='3mo')
     df_price_history = df_price_history.sort_index()
-    df_price_history["dollar_volume"] = df_price_history["Volume"] * df_price_history["Close"]
 
     try:
         underlying_price = get_current_price(df_price_history)
@@ -210,22 +177,22 @@ def compute_recommendation(
         if calls.empty or puts.empty:
             continue
 
-        call_diffs = (calls["strike"] - underlying_price).abs()
+        call_diffs = (calls['strike'] - underlying_price).abs()
         call_idx = call_diffs.idxmin()
-        call_iv = calls.loc[call_idx, "impliedVolatility"]
+        call_iv = calls.loc[call_idx, 'impliedVolatility']
 
-        put_diffs = (puts["strike"] - underlying_price).abs()
+        put_diffs = (puts['strike'] - underlying_price).abs()
         put_idx = put_diffs.idxmin()
-        put_iv = puts.loc[put_idx, "impliedVolatility"]
+        put_iv = puts.loc[put_idx, 'impliedVolatility']
 
         atm_iv_value = (call_iv + put_iv) / 2.0
         atm_iv[exp_date] = atm_iv_value
 
         if i == 0:
-            call_bid = calls.loc[call_idx, "bid"]
-            call_ask = calls.loc[call_idx, "ask"]
-            put_bid = puts.loc[put_idx, "bid"]
-            put_ask = puts.loc[put_idx, "ask"]
+            call_bid = calls.loc[call_idx, 'bid']
+            call_ask = calls.loc[call_idx, 'ask']
+            put_bid = puts.loc[put_idx, 'bid']
+            put_ask = puts.loc[put_idx, 'ask']
 
             if call_bid is not None and call_ask is not None:
                 call_mid = (call_bid + call_ask) / 2.0
@@ -238,7 +205,7 @@ def compute_recommendation(
                 put_mid = None
 
             if call_mid is not None and put_mid is not None:
-                straddle = call_mid + put_mid
+                straddle = (call_mid + put_mid)
 
         i += 1
 
@@ -255,44 +222,34 @@ def compute_recommendation(
         ivs.append(iv)
 
     term_spline = build_term_structure(dtes, ivs)
-    if not term_spline:
-        return
 
     ts_slope_0_45 = (term_spline(45) - term_spline(dtes[0])) / (45 - dtes[0])
 
     iv30_rv30 = term_spline(30) / yang_zhang(df_price_history)
 
-    avg_share_volume = df_price_history["Volume"].rolling(30).mean().dropna().iloc[-1]
-    avg_dollar_volume = df_price_history["dollar_volume"].rolling(30).mean().dropna().iloc[-1]
+    avg_volume = df_price_history['Volume'].rolling(30).mean().dropna().iloc[-1]
 
     expected_move = str(round(straddle / underlying_price * 100, 2)) + "%" if straddle else None
 
     result_summary = {
-        "avg_30d_dollar_volume": round(avg_dollar_volume, 3),
-        "avg_30d_dollar_volume_pass": avg_dollar_volume >= min_avg_30d_dollar_volume,
-        "avg_30d_share_volume": round(avg_share_volume, 3),
-        "avg_30d_share_volume_pass": avg_share_volume >= min_avg_30d_share_volume,
-        "iv30_rv30": round(iv30_rv30, 3),
-        "iv30_rv30_pass": iv30_rv30 >= min_iv30_rv30,
-        "ts_slope_0_45": ts_slope_0_45,
-        "ts_slope_0_45_pass": ts_slope_0_45 <= max_ts_slope_0_45,
-        "underlying_price": underlying_price,
-        "call_spread": (call_bid, call_ask),
-        "put_spread": (put_bid, put_ask),
-        "expected_move": expected_move,
+        'avg_volume': round(avg_volume, 3),
+        'avg_volume_pass': avg_volume >= min_avg_30d_volume,
+        'iv30_rv30': round(iv30_rv30, 3),
+        'iv30_rv30_pass': iv30_rv30 >= min_iv30_rv30,
+        'ts_slope_0_45': ts_slope_0_45,
+        'ts_slope_0_45_pass': ts_slope_0_45 <= max_ts_slope_0_45,
+        'underlying_price': underlying_price,
+        'call_spread': (call_bid, call_ask),
+        'put_spread': (put_bid, put_ask),
+        'expected_move': expected_move
     }
 
-    if (
-        result_summary["avg_30d_dollar_volume_pass"]
-        and result_summary["iv30_rv30_pass"]
-        and result_summary["ts_slope_0_45_pass"]
-        and result_summary["avg_30d_share_volume_pass"]
-    ):
+    if result_summary['avg_volume_pass'] and result_summary['iv30_rv30_pass'] and result_summary[
+        'ts_slope_0_45_pass']:
         suggestion = "Recommended"
-    elif result_summary["ts_slope_0_45_pass"] and (
-        (result_summary["avg_30d_dollar_volume_pass"] and not result_summary["iv30_rv30_pass"])
-        or (result_summary["iv30_rv30_pass"] and not result_summary["avg_30d_dollar_volume_pass"])
-    ):
+    elif result_summary['ts_slope_0_45_pass'] and (
+            (result_summary['avg_volume_pass'] and not result_summary['iv30_rv30_pass']) or (
+            result_summary['iv30_rv30_pass'] and not result_summary['avg_volume_pass'])):
         suggestion = "Consider"
     else:
         suggestion = "Avoid"
@@ -300,41 +257,27 @@ def compute_recommendation(
     result_summary["suggestion"] = suggestion
     kelly_bet = calc_kelly_bet()
 
-    if result_summary["suggestion"] == "Recommended":
-        if result_summary["ts_slope_0_45"] < -0.015:
-            kelly_multiplier_from_base = 1.5
-        elif result_summary["ts_slope_0_45"] < -0.01:
-            kelly_multiplier_from_base = 1.25
-        elif result_summary["ts_slope_0_45"] < -0.0075:
-            kelly_multiplier_from_base = 1.1
-    elif suggestion == "Consider":
-        kelly_multiplier_from_base = 0.20
-    elif suggestion == "Avoid":
-        kelly_multiplier_from_base = 0
+    if suggestion == "Consider":
+        kelly_bet = round(kelly_bet / 5, 2)
+    elif suggestion == 'Avoid':
+        kelly_bet = 0
 
-    kelly_bet = round(kelly_bet * kelly_multiplier_from_base, 2)
-    result_summary["kelly_multiplier_from_base"] = kelly_multiplier_from_base
     result_summary["kelly_bet"] = kelly_bet
     return result_summary
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Run calculations for given tickers")
-    parser.add_argument("--tickers", nargs="+", required=True, help="List of ticker symbols (e.g., NVDA AAPL TSLA)")
+    parser.add_argument('--tickers', nargs='+', required=True, help='List of ticker symbols (e.g., NVDA AAPL TSLA)')
 
     args = parser.parse_args()
     tickers = args.tickers
 
-    if tickers == ["_all"]:
-        tickers = get_all_usa_tickers()
-
-    print(f"Scanning {len(tickers)} tickers: \n{tickers}")
-
     for ticker in tickers:
-        print(f"Scanning ticker: {ticker}")
         result = compute_recommendation(ticker)
         if isinstance(result, dict) and result["suggestion"] == "Recommended":
             print(f"\n *** EDGE FOUND *** \nticker: {ticker}: {result}\n---------------")
         else:
-            print(f"ticker: {ticker}: {result}\n---------------")
-            # pass
+            #print(f"ticker: {ticker}: {result}\n---------------")
+            pass
+
