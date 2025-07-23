@@ -135,19 +135,22 @@ def calc_kelly_bet(p_win: float = 0.66, odds_decimal: float = 1.66, current_bank
 
 def get_all_usa_tickers(use_yf_db=True):
     todays_date = datetime.today().strftime("%Y-%m-%d")
+    
+    ### FMP ### 
 
-    ### FMP ###
-
-    fmp_apikey = os.getenv("FMP_API_KEY")
-    fmp_url = (
-        f"https://financialmodelingprep.com/api/v3/earning_calendar?from={todays_date}&to={todays_date}&apikey={fmp_apikey}"
-    )
-    fmp_response = requests.get(fmp_url)
-    df_fmp = pd.DataFrame(fmp_response.json())
-    df_fmp_usa = df_fmp[df_fmp["symbol"].str.fullmatch(r"[A-Z]{1,4}") & ~df_fmp["symbol"].str.contains(r"[.-]")]
-
-    fmp_usa_symbols = sorted(df_fmp_usa["symbol"].unique().tolist())
-
+    try:
+        fmp_apikey = os.getenv("FMP_API_KEY")
+        fmp_url = (
+            f"https://financialmodelingprep.com/api/v3/earning_calendar?from={todays_date}&to={todays_date}&apikey={fmp_apikey}"  
+        )   
+        fmp_response = requests.get(fmp_url)
+        df_fmp = pd.DataFrame(fmp_response.json())
+        df_fmp_usa = df_fmp[df_fmp["symbol"].str.fullmatch(r"[A-Z]{1,4}") & ~df_fmp["symbol"].str.contains(r"[.-]")]
+        
+        fmp_usa_symbols = sorted(df_fmp_usa["symbol"].unique().tolist())
+    except Exception:
+        print("No FMP API Key found. Only using NASDAQ")
+            
     ### NASDAQ ###
 
     nasdaq_url = f"https://api.nasdaq.com/api/calendar/earnings?date={todays_date}"
@@ -159,7 +162,6 @@ def get_all_usa_tickers(use_yf_db=True):
 
     all_usa_earnings_tickers_today = sorted(list(set(fmp_usa_symbols + nasdaq_tickers)))
     return all_usa_earnings_tickers_today
-
 
 def compute_recommendation(
     ticker,
