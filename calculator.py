@@ -150,6 +150,7 @@ def get_all_usa_tickers(use_yf_db=True):
         fmp_usa_symbols = sorted(df_fmp_usa["symbol"].unique().tolist())
     except Exception:
         print("No FMP API Key found. Only using NASDAQ")
+        fmp_usa_symbols = []
             
     ### NASDAQ ###
 
