@@ -175,7 +175,7 @@ def compute_recommendation(
     ticker,
     min_avg_30d_dollar_volume=10_000_000,
     min_avg_30d_share_volume=1_500_000,
-    min_iv30_rv30=1.5,
+    min_iv30_rv30=1.35,
     max_ts_slope_0_45=-0.00500,
 ):
     ticker = ticker.strip().upper()
