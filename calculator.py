@@ -358,13 +358,10 @@ if __name__ == "__main__":
     if tickers == ["_all"]:
         tickers = get_all_usa_tickers()
 
-    print(f"Scanning {len(tickers)} tickers: \n{tickers}")
+    print(f"Scanning {len(tickers)} tickers: \n{tickers}\n")
     
     for ticker in tickers:
-        print(f"Scanning ticker: {ticker}")
         result = compute_recommendation(ticker)
-    
-        print()
         if isinstance(result, dict) and result.get("suggestion") == "Recommended":
             print(" *** EDGE FOUND ***")
     
