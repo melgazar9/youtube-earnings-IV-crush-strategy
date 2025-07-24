@@ -7,6 +7,8 @@ import warnings
 import pandas as pd
 import os
 import requests
+from pprint import pprint
+
 
 warnings.filterwarnings("ignore", message="Not enough unique days to interpolate for ticker")
 
@@ -346,7 +348,6 @@ def compute_recommendation(
     result_summary["kelly_bet"] = kelly_bet
     return result_summary
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run calculations for given tickers")
     parser.add_argument("--tickers", nargs="+", required=True, help="List of ticker symbols (e.g., NVDA AAPL TSLA)")
@@ -358,12 +359,19 @@ if __name__ == "__main__":
         tickers = get_all_usa_tickers()
 
     print(f"Scanning {len(tickers)} tickers: \n{tickers}")
-
+    
     for ticker in tickers:
         print(f"Scanning ticker: {ticker}")
         result = compute_recommendation(ticker)
-        if isinstance(result, dict) and result["suggestion"] == "Recommended":
-            print(f"\n *** EDGE FOUND *** \nticker: {ticker}: {result}\n---------------")
+    
+        print()
+        if isinstance(result, dict) and result.get("suggestion") == "Recommended":
+            print(" *** EDGE FOUND ***")
+    
+        print(f"ticker: {ticker}")
+        if isinstance(result, dict):
+            for k, v in result.items():
+                print(f"  {k}: {v}")
         else:
-            #print(f"ticker: {ticker}: {result}\n---------------")
-            pass
+            print(f"  {result}")
+        print("---------------")
