@@ -12,6 +12,14 @@ from pprint import pprint
 
 warnings.filterwarnings("ignore", message="Not enough unique days to interpolate for ticker")
 
+### ------ Globals ------ ###
+
+MIN_AVG_30D_DOLLAR_VOLUME = 10_000_000
+MIN_AVG_30D_SHARE_VOLUME = 1_500_500
+MIN_IV30_RV30 = 1.35
+MAX_TS_SLOPE_0_45 = -0.0050
+
+
 
 def filter_dates(dates):
     today = datetime.today().date()
@@ -137,9 +145,7 @@ def calc_kelly_bet(p_win: float = 0.66, odds_decimal: float = 1.66, current_bank
     return round(bet_amount, 2)
 
 
-def get_all_usa_tickers(use_yf_db=True):
-    todays_date = datetime.today().strftime("%Y-%m-%d")
-    #todays_date = (datetime.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+def get_all_usa_tickers(use_yf_db=True, earnings_date=datetime.today().strftime("%Y-%m-%d")):
     
     ### FMP ### 
 
@@ -173,10 +179,10 @@ def get_all_usa_tickers(use_yf_db=True):
 
 def compute_recommendation(
     ticker,
-    min_avg_30d_dollar_volume=10_000_000,
-    min_avg_30d_share_volume=1_500_000,
-    min_iv30_rv30=1.35,
-    max_ts_slope_0_45=-0.00500,
+    min_avg_30d_dollar_volume=MIN_AVG_30D_DOLLAR_VOLUME,
+    min_avg_30d_share_volume=MIN_AVG_30D_SHARE_VOLUME,
+    min_iv30_rv30=MIN_IV30_RV30,
+    max_ts_slope_0_45=MAX_TS_SLOPE_0_45,
 ):
     ticker = ticker.strip().upper()
     if not ticker:
@@ -350,13 +356,18 @@ def compute_recommendation(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run calculations for given tickers")
+
+    parser.add_argument("--earnings-date", type=str, default=datetime.today().strftime("%Y-%m-%d"),
+                        help="Earnings date in YYYY-MM-DD format (default: today)")
+
     parser.add_argument("--tickers", nargs="+", required=True, help="List of ticker symbols (e.g., NVDA AAPL TSLA)")
 
     args = parser.parse_args()
+    earnings_date = args.earnings_date
     tickers = args.tickers
 
     if tickers == ["_all"]:
-        tickers = get_all_usa_tickers()
+        tickers = get_all_usa_tickers(earnings_date=earnings_date)
 
     print(f"Scanning {len(tickers)} tickers: \n{tickers}\n")
     
