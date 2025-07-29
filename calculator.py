@@ -152,7 +152,7 @@ def get_all_usa_tickers(use_yf_db=True, earnings_date=datetime.today().strftime(
     try:
         fmp_apikey = os.getenv("FMP_API_KEY")
         fmp_url = (
-            f"https://financialmodelingprep.com/api/v3/earning_calendar?from={todays_date}&to={todays_date}&apikey={fmp_apikey}"  
+            f"https://financialmodelingprep.com/api/v3/earning_calendar?from={earnings_date}&to={earnings_date}&apikey={fmp_apikey}"  
         )   
         fmp_response = requests.get(fmp_url)
         df_fmp = pd.DataFrame(fmp_response.json())
@@ -165,7 +165,7 @@ def get_all_usa_tickers(use_yf_db=True, earnings_date=datetime.today().strftime(
             
     ### NASDAQ ###
 
-    nasdaq_url = f"https://api.nasdaq.com/api/calendar/earnings?date={todays_date}"
+    nasdaq_url = f"https://api.nasdaq.com/api/calendar/earnings?date={earnings_date}"
     nasdaq_headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
     nasdaq_response = requests.get(nasdaq_url, headers=nasdaq_headers)
     nasdaq_calendar = nasdaq_response.json().get("data").get("rows")
