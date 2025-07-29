@@ -362,9 +362,13 @@ if __name__ == "__main__":
 
     parser.add_argument("--tickers", nargs="+", required=True, help="List of ticker symbols (e.g., NVDA AAPL TSLA)")
 
+    parser.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=True,
+                        help="Verbose output for displaying all results. Default is True.")
+
     args = parser.parse_args()
     earnings_date = args.earnings_date
     tickers = args.tickers
+    verbose = args.verbose
 
     if tickers == ["_all"]:
         tickers = get_all_usa_tickers(earnings_date=earnings_date)
@@ -373,13 +377,15 @@ if __name__ == "__main__":
     
     for ticker in tickers:
         result = compute_recommendation(ticker)
-        if isinstance(result, dict) and result.get("suggestion") == "Recommended":
+        is_edge = isinstance(result, dict) and result.get("suggestion") == "Recommended"
+        if is_edge:
             print(" *** EDGE FOUND ***")
     
-        print(f"ticker: {ticker}")
-        if isinstance(result, dict):
-            for k, v in result.items():
-                print(f"  {k}: {v}")
-        else:
-            print(f"  {result}")
-        print("---------------")
+        if verbose or is_edge:
+            print(f"ticker: {ticker}")
+            if isinstance(result, dict):
+                for k, v in result.items():
+                    print(f"  {k}: {v}")
+            else:
+                print(f"  {result}")
+            print("---------------")
