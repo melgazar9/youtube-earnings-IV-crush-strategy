@@ -7,8 +7,6 @@ import warnings
 import pandas as pd
 import os
 import requests
-from pprint import pprint
-
 
 warnings.filterwarnings("ignore", message="Not enough unique days to interpolate for ticker")
 
@@ -18,7 +16,6 @@ MIN_AVG_30D_DOLLAR_VOLUME = 10_000_000
 MIN_AVG_30D_SHARE_VOLUME = 1_500_500
 MIN_IV30_RV30 = 1.35
 MAX_TS_SLOPE_0_45 = -0.0050
-
 
 
 def filter_dates(dates):
@@ -47,10 +44,10 @@ def yang_zhang(price_data, window=30, trading_periods=252, return_last_only=True
     log_co = (price_data["Close"] / price_data["Open"]).apply(np.log)
 
     log_oc = (price_data["Open"] / price_data["Close"].shift(1)).apply(np.log)
-    log_oc_sq = log_oc**2
+    log_oc_sq = log_oc ** 2
 
     log_cc = (price_data["Close"] / price_data["Close"].shift(1)).apply(np.log)
-    log_cc_sq = log_cc**2
+    log_cc_sq = log_cc ** 2
 
     rs = log_ho * (log_ho - log_co) + log_lo * (log_lo - log_co)
 
@@ -103,7 +100,8 @@ def get_current_price(df_price_history):
     return df_price_history["Close"].iloc[-1]
 
 
-def calc_kelly_bet(p_win: float = 0.66, odds_decimal: float = 1.66, current_bankroll: float = 10000, pct_kelly=0.10) -> float:
+def calc_kelly_bet(p_win: float = 0.66, odds_decimal: float = 1.66, current_bankroll: float = 10000,
+                   pct_kelly=0.10) -> float:
     """
     Calculates the Kelly Criterion optimal bet amount.
 
@@ -146,23 +144,22 @@ def calc_kelly_bet(p_win: float = 0.66, odds_decimal: float = 1.66, current_bank
 
 
 def get_all_usa_tickers(use_yf_db=True, earnings_date=datetime.today().strftime("%Y-%m-%d")):
-    
     ### FMP ### 
 
     try:
         fmp_apikey = os.getenv("FMP_API_KEY")
         fmp_url = (
-            f"https://financialmodelingprep.com/api/v3/earning_calendar?from={earnings_date}&to={earnings_date}&apikey={fmp_apikey}"  
-        )   
+            f"https://financialmodelingprep.com/api/v3/earning_calendar?from={earnings_date}&to={earnings_date}&apikey={fmp_apikey}"
+        )
         fmp_response = requests.get(fmp_url)
         df_fmp = pd.DataFrame(fmp_response.json())
         df_fmp_usa = df_fmp[df_fmp["symbol"].str.fullmatch(r"[A-Z]{1,4}") & ~df_fmp["symbol"].str.contains(r"[.-]")]
-        
+
         fmp_usa_symbols = sorted(df_fmp_usa["symbol"].unique().tolist())
     except Exception:
         print("No FMP API Key found. Only using NASDAQ")
         fmp_usa_symbols = []
-            
+
     ### NASDAQ ###
 
     nasdaq_url = f"https://api.nasdaq.com/api/calendar/earnings?date={earnings_date}"
@@ -177,12 +174,13 @@ def get_all_usa_tickers(use_yf_db=True, earnings_date=datetime.today().strftime(
     all_usa_earnings_tickers_today = sorted(list(set(fmp_usa_symbols + nasdaq_tickers)))
     return all_usa_earnings_tickers_today
 
+
 def compute_recommendation(
-    ticker,
-    min_avg_30d_dollar_volume=MIN_AVG_30D_DOLLAR_VOLUME,
-    min_avg_30d_share_volume=MIN_AVG_30D_SHARE_VOLUME,
-    min_iv30_rv30=MIN_IV30_RV30,
-    max_ts_slope_0_45=MAX_TS_SLOPE_0_45,
+        ticker,
+        min_avg_30d_dollar_volume=MIN_AVG_30D_DOLLAR_VOLUME,
+        min_avg_30d_share_volume=MIN_AVG_30D_SHARE_VOLUME,
+        min_iv30_rv30=MIN_IV30_RV30,
+        max_ts_slope_0_45=MAX_TS_SLOPE_0_45,
 ):
     ticker = ticker.strip().upper()
     if not ticker:
@@ -223,7 +221,7 @@ def compute_recommendation(
         calls = chain.calls
         puts = chain.puts
 
-        if calls.empty or puts.empty:
+        if calls is None or puts is None or calls.empty or puts.empty:
             continue
 
         call_diffs = (calls["strike"] - underlying_price).abs()
@@ -278,8 +276,18 @@ def compute_recommendation(
 
     iv30_rv30 = term_spline(30) / yang_zhang(df_price_history)
 
-    avg_share_volume = df_price_history["Volume"].rolling(30).mean().dropna().iloc[-1]
-    avg_dollar_volume = df_price_history["dollar_volume"].rolling(30).mean().dropna().iloc[-1]
+    rolling_share_volume = df_price_history["Volume"].rolling(30).mean().dropna()
+    rolling_dollar_volume = df_price_history["dollar_volume"].rolling(30).mean().dropna()
+
+    if rolling_share_volume.empty:
+        avg_share_volume = 0  # or np.nan or raise an error or return a message
+    else:
+        avg_share_volume = rolling_share_volume.iloc[-1]
+
+    if rolling_dollar_volume.empty:
+        avg_dollar_volume = 0
+    else:
+        avg_dollar_volume = rolling_dollar_volume.iloc[-1]
 
     expected_move = str(round(straddle / underlying_price * 100, 2)) + "%" if straddle else None
 
@@ -299,32 +307,32 @@ def compute_recommendation(
     }
 
     if (
-        result_summary["avg_30d_dollar_volume_pass"]
-        and result_summary["iv30_rv30_pass"]
-        and result_summary["ts_slope_0_45_pass"]
-        and result_summary["avg_30d_share_volume_pass"]
+            result_summary["avg_30d_dollar_volume_pass"]
+            and result_summary["iv30_rv30_pass"]
+            and result_summary["ts_slope_0_45_pass"]
+            and result_summary["avg_30d_share_volume_pass"]
     ):
         suggestion = "Recommended"
     elif result_summary["ts_slope_0_45_pass"] and (
-        (result_summary["avg_30d_dollar_volume_pass"] and not result_summary["iv30_rv30_pass"])
-        or (result_summary["iv30_rv30_pass"] and not result_summary["avg_30d_dollar_volume_pass"])
+            (result_summary["avg_30d_dollar_volume_pass"] and not result_summary["iv30_rv30_pass"])
+            or (result_summary["iv30_rv30_pass"] and not result_summary["avg_30d_dollar_volume_pass"])
     ):
         suggestion = "Consider"
     else:
         suggestion = "Avoid"
 
-    edge_score = 0 
+    edge_score = 0
 
     # IV to RV ratio
     if iv30_rv30 > 2.0:
         edge_score += 1.0
     elif iv30_rv30 > 1.5:
         edge_score += 0.5
-    
+
     # Term structure slope
     if ts_slope_0_45 < -0.01:
         edge_score += 0.5
-    
+
     # Liquidity
     if avg_dollar_volume > 50_000_000:
         edge_score += 0.5
@@ -354,6 +362,7 @@ def compute_recommendation(
     result_summary["kelly_bet"] = kelly_bet
     return result_summary
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run calculations for given tickers")
 
@@ -374,13 +383,13 @@ if __name__ == "__main__":
         tickers = get_all_usa_tickers(earnings_date=earnings_date)
 
     print(f"Scanning {len(tickers)} tickers: \n{tickers}\n")
-    
+
     for ticker in tickers:
         result = compute_recommendation(ticker)
         is_edge = isinstance(result, dict) and result.get("suggestion") == "Recommended"
         if is_edge:
             print(" *** EDGE FOUND ***")
-    
+
         if verbose or is_edge:
             print(f"ticker: {ticker}")
             if isinstance(result, dict):
