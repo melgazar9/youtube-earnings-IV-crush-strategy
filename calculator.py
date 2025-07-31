@@ -186,7 +186,12 @@ def calc_prev_avg_earnings_move(df_history, ticker_obj, days_back=EARNINGS_LOOKB
     df_history["Date"] = df_history["Date"].dt.date
     df_history = df_history.sort_values("Date")
 
-    df_earnings_dates = ticker_obj.earnings_dates.reset_index()
+    df_earnings_dates = ticker_obj.earnings_dates
+
+    if ticker_obj.earnings_dates is None:
+        return 0, 0, 0, 0, None
+
+    df_earnings_dates = df_earnings_dates.reset_index()
     df_earnings_dates = df_earnings_dates[df_earnings_dates["Event Type"] == "Earnings"].copy()
     df_earnings_dates["Date"] = df_earnings_dates["Earnings Date"].dt.date
 
@@ -213,7 +218,7 @@ def calc_prev_avg_earnings_move(df_history, ticker_obj, days_back=EARNINGS_LOOKB
         axis=1
     )
 
-    if plot_loc:
+    if plot_loc and df_flat.shape[0]:
         df_flat["text"] = (df_flat["earnings_move"] * 100).round(2).astype(str) + "%"
         p = px.bar(
             x=df_flat["Date"],
@@ -230,12 +235,14 @@ def calc_prev_avg_earnings_move(df_history, ticker_obj, days_back=EARNINGS_LOOKB
         p.write_html(full_path)
         print(f"Saved plot for ticker {ticker} here: {full_path}")
 
-    avg_abs_pct_move = abs(df_flat["earnings_move"]).mean().round(3)
-    median_abs_pct_move = abs(df_flat["earnings_move"]).median().round(3)
-    min_abs_pct_move = abs(df_flat["earnings_move"]).min().round(3)
-    max_abs_pct_move = abs(df_flat["earnings_move"]).max().round(3)
+    avg_abs_pct_move = round(abs(df_flat["earnings_move"]).mean(), 3)
+    median_abs_pct_move = round(abs(df_flat["earnings_move"]).median(), 3)
+    min_abs_pct_move = round(abs(df_flat["earnings_move"]).min(), 3)
+    max_abs_pct_move = round(abs(df_flat["earnings_move"]).max(), 3)
+    earnings_release_timing_mode = df_flat["release_timing"].mode()
+    release_time = earnings_release_timing_mode.iloc[0] if not earnings_release_timing_mode.empty else "unknown"
 
-    return avg_abs_pct_move, median_abs_pct_move, min_abs_pct_move, max_abs_pct_move, df_flat["release_timing"].mode().iloc[0]
+    return avg_abs_pct_move, median_abs_pct_move, min_abs_pct_move, max_abs_pct_move, release_time
 
 def compute_recommendation(
         ticker,
@@ -379,10 +386,10 @@ def compute_recommendation(
         "put_spread": (put_bid, put_ask),
         "expected_move_straddle": (expected_move_straddle * 100).round(3).astype(str) + "%",
         "straddle_pct_move_ge_hist_pct_move_pass": expected_move_straddle >= prev_earnings_avg_abs_pct_move,
-        "prev_earnings_avg_abs_pct_move": (prev_earnings_avg_abs_pct_move * 100).round(3).astype(str) + "%",
-        "prev_earnings_median_abs_pct_move": (prev_earnings_median_abs_pct_move * 100).round(3).astype(str) + "%",
-        "prev_earnings_min_abs_pct_move": (prev_earnings_min_abs_pct_move * 100).round(3).astype(str) + "%",
-        "prev_earnings_max_abs_pct_move": (prev_earnings_max_abs_pct_move * 100).round(3).astype(str) + "%",
+        "prev_earnings_avg_abs_pct_move": str(round(prev_earnings_avg_abs_pct_move * 100, 3)) + "%",
+        "prev_earnings_median_abs_pct_move": str(round(prev_earnings_median_abs_pct_move * 100, 3)) + "%",
+        "prev_earnings_min_abs_pct_move": str(round(prev_earnings_min_abs_pct_move * 100, 3)) + "%",
+        "prev_earnings_max_abs_pct_move": str(round(prev_earnings_max_abs_pct_move * 100, 3)) + "%",
         "earnings_release_time": earnings_release_time
     }
 
