@@ -9,7 +9,6 @@ import os
 import requests
 import plotly.express as px
 from dateutil.relativedelta import relativedelta
-import pytz
 
 warnings.filterwarnings("ignore", message="Not enough unique days to interpolate for ticker")
 
@@ -182,16 +181,22 @@ def get_all_usa_tickers(use_yf_db=True, earnings_date=datetime.today().strftime(
     return all_usa_earnings_tickers_today
 
 
-def calc_prev_avg_earnings_move(df_history, ticker_obj, plot_loc=PLOT_LOC):
+def calc_prev_earnings_stats(df_history, ticker_obj, ticker, plot_loc=PLOT_LOC):
     df_history = df_history.copy()
     if "Date" not in df_history.columns and df_history.index.name == "Date":
         df_history = df_history.reset_index()
     df_history["Date"] = df_history["Date"].dt.date
     df_history = df_history.sort_values("Date")
 
-    df_earnings_dates = ticker_obj.earnings_dates
+    n_tries = 3
+    i = 0
+    while i < n_tries:
+        df_earnings_dates = ticker_obj.earnings_dates
+        if df_earnings_dates is not None and not df_earnings_dates.empty:
+            break
+        i += 1
 
-    if ticker_obj.earnings_dates is None:
+    if df_earnings_dates is None:
         return 0, 0, 0, 0, None
 
     df_earnings_dates = df_earnings_dates.reset_index()
@@ -245,8 +250,12 @@ def calc_prev_avg_earnings_move(df_history, ticker_obj, plot_loc=PLOT_LOC):
     max_abs_pct_move = round(abs(df_flat["earnings_move"]).max(), 3)
     earnings_release_timing_mode = df_flat["release_timing"].mode()
     release_time = earnings_release_timing_mode.iloc[0] if not earnings_release_timing_mode.empty else "unknown"
+    prev_earnings_values = df_flat["earnings_move"].dropna().values
 
-    return avg_abs_pct_move, median_abs_pct_move, min_abs_pct_move, max_abs_pct_move, prev_earnings_std, release_time
+    if prev_earnings_std < 0.001:
+        prev_earnings_std = 0.001  # avoid division by 0 or overly tight thresholds
+
+    return avg_abs_pct_move, median_abs_pct_move, min_abs_pct_move, max_abs_pct_move, prev_earnings_std, release_time, prev_earnings_values
 
 
 def compute_recommendation(
@@ -263,7 +272,13 @@ def compute_recommendation(
 
     try:
         stock = yf.Ticker(ticker)
-        exp_dates = list(stock.options)
+        n_tries = 3
+        i = 0
+        while i < n_tries:
+            exp_dates = list(stock.options)
+            if exp_dates:
+                break
+            i += 1
         if len(exp_dates) == 0:
             raise KeyError(f"No options data found for ticker {ticker}")
     except KeyError:
@@ -276,10 +291,23 @@ def compute_recommendation(
 
     options_chains = {}
     for exp_date in exp_dates:
-        options_chains[exp_date] = stock.option_chain(exp_date)
+        n_tries = 3
+        i = 0
+        while i < n_tries:
+            chain = stock.option_chain(exp_date)
+            options_chains[exp_date] = chain
+            if chain is not None and len(chain):
+                break
+            i += 1
 
-    df_history = stock.history(
-        start=(datetime.today() - timedelta(days=EARNINGS_LOOKBACK_DAYS_FOR_AGG)).strftime("%Y-%m-%d"))
+    n_tries = 3
+    i = 0
+    while i < n_tries:
+        df_history = stock.history(
+            start=(datetime.today() - timedelta(days=EARNINGS_LOOKBACK_DAYS_FOR_AGG)).strftime("%Y-%m-%d"))
+        if df_history is not None and not df_history.empty:
+            break
+        i += 1
 
     # df_price_history_3mo = stock.history(period="3mo")
 
@@ -336,10 +364,13 @@ def compute_recommendation(
             if call_mid is not None and put_mid is not None and call_mid != 0 and put_mid != 0:
                 straddle = call_mid + put_mid
             else:
-                warnings.warn(
-                    f"For ticker {ticker} straddle is either 0 or None from available bid/ask spread... using lastPrice.")
                 try:
-                    straddle = calls.iloc[call_idx]["lastPrice"] + puts.iloc[call_idx]["lastPrice"]
+                    if call_idx + 1 < len(calls) and put_idx + 1 < len(puts):
+                        warnings.warn(f"For ticker {ticker} straddle is either 0 or None from available bid/ask spread... using nearest term strikes.")
+                        straddle = calls.iloc[call_idx + 1]["lastPrice"] + puts.iloc[put_idx + 1]["lastPrice"]
+                    if not straddle:
+                        warnings.warn(f"For ticker {ticker} straddle is either 0 or None from available bid/ask spread... using lastPrice.")
+                        straddle = calls.iloc[call_idx]["lastPrice"] + puts.iloc[call_idx]["lastPrice"]
                 except IndexError:
                     warnings.warn(f"For ticker {ticker}, call_idx {call_idx} is out of bounds in calls/puts.")
                     return None
@@ -382,8 +413,8 @@ def compute_recommendation(
 
     (
         prev_earnings_avg_abs_pct_move, prev_earnings_median_abs_pct_move, prev_earnings_min_abs_pct_move,
-        prev_earnings_max_abs_pct_move, prev_earnings_std, earnings_release_time
-     ) = calc_prev_avg_earnings_move(df_history.reset_index(), stock, plot_loc=plot_loc)
+        prev_earnings_max_abs_pct_move, prev_earnings_std, earnings_release_time, prev_earnings_values
+     ) = calc_prev_earnings_stats(df_history.reset_index(), stock, ticker, plot_loc=plot_loc)
 
     result_summary = {
         "avg_30d_dollar_volume": round(avg_dollar_volume, 3),
@@ -403,6 +434,7 @@ def compute_recommendation(
         "prev_earnings_median_abs_pct_move": str(round(prev_earnings_median_abs_pct_move * 100, 3)) + "%",
         "prev_earnings_min_abs_pct_move": str(round(prev_earnings_min_abs_pct_move * 100, 3)) + "%",
         "prev_earnings_max_abs_pct_move": str(round(prev_earnings_max_abs_pct_move * 100, 3)) + "%",
+        "prev_earnings_values": [str(round(v * 100, 3)) + "%" for v in prev_earnings_values],
         "earnings_release_time": earnings_release_time
     }
 
@@ -437,10 +469,20 @@ def compute_recommendation(
             and result_summary["ts_slope_0_45_pass"]
             and result_summary["avg_30d_share_volume_pass"]
             and result_summary["underlying_price"] >= MIN_SHARE_PRICE
-            and expected_move_straddle * prev_earnings_std >= prev_earnings_avg_abs_pct_move
-            and expected_move_straddle > prev_earnings_min_abs_pct_move  # safety filter - data quality check
+            and prev_earnings_avg_abs_pct_move - expected_move_straddle <= 0.75 * prev_earnings_std  # Avg move - Straddle is within 0.75 std deviations
+            and expected_move_straddle > prev_earnings_min_abs_pct_move  # Safety filter - data quality check
     ):
         improved_suggestion = "Slightly Recommended"
+    elif (
+            result_summary["avg_30d_dollar_volume_pass"]
+            and result_summary["iv30_rv30_pass"]
+            and result_summary["ts_slope_0_45_pass"]
+            and result_summary["avg_30d_share_volume_pass"]
+            and result_summary["underlying_price"] >= MIN_SHARE_PRICE
+            and prev_earnings_avg_abs_pct_move - expected_move_straddle <= 0.50 * prev_earnings_std  # Avg move - Straddle is within 0.50 std deviations
+            and expected_move_straddle > prev_earnings_min_abs_pct_move  # Safety filter - data quality check
+    ):
+        improved_suggestion = "Recommended"
     elif result_summary["ts_slope_0_45_pass"] and result_summary["avg_30d_dollar_volume_pass"] and result_summary[
         "iv30_rv30_pass"] and expected_move_straddle * 1.5 < prev_earnings_min_abs_pct_move:
         improved_suggestion = "Consider..."
@@ -475,7 +517,7 @@ def compute_recommendation(
     if expected_move_straddle >= prev_earnings_avg_abs_pct_move:
         edge_score += 1.0
 
-    if improved_suggestion == "Recommended":
+    if "Recommended" in improved_suggestion:
         if edge_score >= 3.0:
             kelly_multiplier_from_base = 2.0
         elif edge_score >= 2.5:
@@ -485,12 +527,14 @@ def compute_recommendation(
         elif edge_score >= 1.5:
             kelly_multiplier_from_base = 1.25
         elif edge_score >= 1:
-            kelly_multiplier_from_base = 1.1
+            kelly_multiplier_from_base = 1.125
         elif edge_score >= 0.5:
             kelly_multiplier_from_base = 1.0
         elif edge_score == 0:
             kelly_multiplier_from_base = 0.80
-    elif improved_suggestion == "Consider":
+    elif "Consider" in improved_suggestion:
+        kelly_multiplier_from_base = 0.5
+    elif original_suggestion == "Consider":
         kelly_multiplier_from_base = 0.2
     else:
         kelly_multiplier_from_base = 0
@@ -528,9 +572,9 @@ if __name__ == "__main__":
 
     for ticker in tickers:
         result = compute_recommendation(ticker)
-        is_edge = isinstance(result, dict) and result.get("improved_suggestion") == "Recommended"
+        is_edge = isinstance(result, dict) and "Recommended" in result.get("improved_suggestion")
         if is_edge:
-            print(" *** EDGE FOUND ***")
+            print(" *** EDGE FOUND ***\n")
 
         if verbose or is_edge:
             print(f"ticker: {ticker}")
