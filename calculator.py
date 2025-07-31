@@ -197,7 +197,7 @@ def calc_prev_earnings_stats(df_history, ticker_obj, ticker, plot_loc=PLOT_LOC):
         i += 1
 
     if df_earnings_dates is None:
-        return 0, 0, 0, 0, None
+        return 0, 0, 0, 0, 0, 0, None
 
     df_earnings_dates = df_earnings_dates.reset_index()
     df_earnings_dates = df_earnings_dates[df_earnings_dates["Event Type"] == "Earnings"].copy()
