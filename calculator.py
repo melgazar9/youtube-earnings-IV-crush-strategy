@@ -7,6 +7,9 @@ import warnings
 import pandas as pd
 import os
 import requests
+import plotly.express as px
+from dateutil.relativedelta import relativedelta
+import pytz
 
 warnings.filterwarnings("ignore", message="Not enough unique days to interpolate for ticker")
 
@@ -16,7 +19,9 @@ MIN_AVG_30D_DOLLAR_VOLUME = 10_000_000
 MIN_AVG_30D_SHARE_VOLUME = 1_500_500
 MIN_IV30_RV30 = 1.35
 MAX_TS_SLOPE_0_45 = -0.0050
-
+MIN_SHARE_PRICE = 15
+EARNINGS_LOOKBACK_DAYS_FOR_AGG = 365*3
+PLOT_LOC = "/Users/melgazar9/tmp_plots/"
 
 def filter_dates(dates):
     today = datetime.today().date()
@@ -96,8 +101,8 @@ def build_term_structure(days, ivs):
     return term_spline
 
 
-def get_current_price(df_price_history):
-    return df_price_history["Close"].iloc[-1]
+def get_current_price(df_price_history_3mo):
+    return df_price_history_3mo["Close"].iloc[-1]
 
 
 def calc_kelly_bet(p_win: float = 0.66, odds_decimal: float = 1.66, current_bankroll: float = 10000,
@@ -144,7 +149,7 @@ def calc_kelly_bet(p_win: float = 0.66, odds_decimal: float = 1.66, current_bank
 
 
 def get_all_usa_tickers(use_yf_db=True, earnings_date=datetime.today().strftime("%Y-%m-%d")):
-    ### FMP ### 
+    ### FMP ###
 
     try:
         fmp_apikey = os.getenv("FMP_API_KEY")
@@ -174,6 +179,63 @@ def get_all_usa_tickers(use_yf_db=True, earnings_date=datetime.today().strftime(
     all_usa_earnings_tickers_today = sorted(list(set(fmp_usa_symbols + nasdaq_tickers)))
     return all_usa_earnings_tickers_today
 
+def calc_prev_avg_earnings_move(df_history, ticker_obj, days_back=EARNINGS_LOOKBACK_DAYS_FOR_AGG, plot_loc=PLOT_LOC):
+    df_history = df_history.copy()
+    if "Date" not in df_history.columns and df_history.index.name == "Date":
+        df_history = df_history.reset_index()
+    df_history["Date"] = df_history["Date"].dt.date
+    df_history = df_history.sort_values("Date")
+
+    df_earnings_dates = ticker_obj.earnings_dates.reset_index()
+    df_earnings_dates = df_earnings_dates[df_earnings_dates["Event Type"] == "Earnings"].copy()
+    df_earnings_dates["Date"] = df_earnings_dates["Earnings Date"].dt.date
+
+    def classify_release(dt):
+        hour = dt.hour
+        if hour < 9:
+            return "pre-market"
+        elif hour >= 9:
+            return "post-market"
+    
+    df_earnings_dates["release_timing"] = df_earnings_dates["Earnings Date"].apply(classify_release)
+    df_earnings = df_earnings_dates.merge(df_history, on="Date", how="left", suffixes=('', '_earnings'))
+    df_earnings["next_date"] = df_earnings["Date"] + pd.Timedelta(days=1)
+    df_next = df_history.rename(columns=lambda c: f"{c}_next" if c != "Date" else "next_date")
+    df_flat = df_earnings.merge(df_next, on="next_date", how="left")
+    df_flat["prev_close"] = df_flat["Close"].shift(1)
+    df_flat["pre_market_move"] = (df_flat["Open"] - df_flat["prev_close"]) / df_flat["prev_close"]
+    df_flat["post_market_move"] = (df_flat["Open_next"] - df_flat["Close"]) / df_flat["Close"]
+    
+    df_flat["earnings_move"] = df_flat.apply(
+        lambda row: row["pre_market_move"] if row["release_timing"] == "pre-market"
+        else row["post_market_move"] if row["release_timing"] == "post-market"
+        else None,
+        axis=1
+    )
+
+    if plot_loc:
+        df_flat["text"] = (df_flat["earnings_move"] * 100).round(2).astype(str) + "%"
+        p = px.bar(
+            x=df_flat["Date"],
+            y=df_flat["earnings_move"].round(3),
+            color=df_flat.index.astype(str),
+            text=df_flat["text"],
+            title="Earnings % Move", 
+        )
+        p.update_traces(textangle=0)
+        # p.show()
+
+        full_path = os.path.join(plot_loc, f"{ticker}_{df_flat["Date"].iloc[0].strftime("%Y-%m-%d")}.html")
+        os.makedirs(plot_loc, exist_ok=True)
+        p.write_html(full_path)
+        print(f"Saved plot for ticker {ticker} here: {full_path}")
+
+    avg_abs_pct_move = abs(df_flat["earnings_move"]).mean().round(3)
+    median_abs_pct_move = abs(df_flat["earnings_move"]).median().round(3)
+    min_abs_pct_move = abs(df_flat["earnings_move"]).min().round(3)
+    max_abs_pct_move = abs(df_flat["earnings_move"]).max().round(3)
+
+    return avg_abs_pct_move, median_abs_pct_move, min_abs_pct_move, max_abs_pct_move, df_flat["release_timing"].mode().iloc[0]
 
 def compute_recommendation(
         ticker,
@@ -181,6 +243,7 @@ def compute_recommendation(
         min_avg_30d_share_volume=MIN_AVG_30D_SHARE_VOLUME,
         min_iv30_rv30=MIN_IV30_RV30,
         max_ts_slope_0_45=MAX_TS_SLOPE_0_45,
+        plot_loc=PLOT_LOC,
 ):
     ticker = ticker.strip().upper()
     if not ticker:
@@ -203,12 +266,16 @@ def compute_recommendation(
     for exp_date in exp_dates:
         options_chains[exp_date] = stock.option_chain(exp_date)
 
-    df_price_history = stock.history(period="3mo")
-    df_price_history = df_price_history.sort_index()
-    df_price_history["dollar_volume"] = df_price_history["Volume"] * df_price_history["Close"]
+    df_history = stock.history(start=(datetime.today() - timedelta(days=EARNINGS_LOOKBACK_DAYS_FOR_AGG)).strftime("%Y-%m-%d"))
+    # df_price_history_3mo = stock.history(period="3mo")
+
+    df_price_history_3mo = df_history[df_history.index >= (pd.Timestamp.now(df_history.index.tz) - relativedelta(months=3))]
+    # df_price_history_3mo = df_history[df_history.index >= (datetime.now(pytz.timezone("America/New_York")) - relativedelta(months=3))]
+    df_price_history_3mo = df_price_history_3mo.sort_index()
+    df_price_history_3mo["dollar_volume"] = df_price_history_3mo["Volume"] * df_price_history_3mo["Close"]
 
     try:
-        underlying_price = get_current_price(df_price_history)
+        underlying_price = get_current_price(df_price_history_3mo)
         if underlying_price is None:
             raise ValueError("No market price found.")
     except Exception:
@@ -220,40 +287,42 @@ def compute_recommendation(
     for exp_date, chain in options_chains.items():
         calls = chain.calls
         puts = chain.puts
-
+    
         if calls is None or puts is None or calls.empty or puts.empty:
             continue
-
+    
         call_diffs = (calls["strike"] - underlying_price).abs()
         call_idx = call_diffs.idxmin()
         call_iv = calls.loc[call_idx, "impliedVolatility"]
-
+    
         put_diffs = (puts["strike"] - underlying_price).abs()
         put_idx = put_diffs.idxmin()
         put_iv = puts.loc[put_idx, "impliedVolatility"]
-
+    
         atm_iv_value = (call_iv + put_iv) / 2.0
         atm_iv[exp_date] = atm_iv_value
-
+    
         if i == 0:
             call_bid = calls.loc[call_idx, "bid"]
             call_ask = calls.loc[call_idx, "ask"]
             put_bid = puts.loc[put_idx, "bid"]
             put_ask = puts.loc[put_idx, "ask"]
-
+    
             if call_bid is not None and call_ask is not None:
                 call_mid = (call_bid + call_ask) / 2.0
             else:
                 call_mid = None
-
+    
             if put_bid is not None and put_ask is not None:
                 put_mid = (put_bid + put_ask) / 2.0
             else:
                 put_mid = None
-
-            if call_mid is not None and put_mid is not None:
+    
+            if call_mid is not None and put_mid is not None and call_mid != 0 and put_mid != 0:
                 straddle = call_mid + put_mid
-
+            else:
+                warnings.warn(f"For ticker {ticker} straddle is either 0 or None from available bid/ask spread... using lastPrice.")
+                straddle = calls.iloc[call_idx]["lastPrice"] + puts.iloc[call_idx]["lastPrice"]
         i += 1
 
     if not atm_iv:
@@ -274,13 +343,13 @@ def compute_recommendation(
 
     ts_slope_0_45 = (term_spline(45) - term_spline(dtes[0])) / (45 - dtes[0])
 
-    iv30_rv30 = term_spline(30) / yang_zhang(df_price_history)
+    iv30_rv30 = term_spline(30) / yang_zhang(df_price_history_3mo)
 
-    rolling_share_volume = df_price_history["Volume"].rolling(30).mean().dropna()
-    rolling_dollar_volume = df_price_history["dollar_volume"].rolling(30).mean().dropna()
+    rolling_share_volume = df_price_history_3mo["Volume"].rolling(30).mean().dropna()
+    rolling_dollar_volume = df_price_history_3mo["dollar_volume"].rolling(30).mean().dropna()
 
     if rolling_share_volume.empty:
-        avg_share_volume = 0  # or np.nan or raise an error or return a message
+        avg_share_volume = 0
     else:
         avg_share_volume = rolling_share_volume.iloc[-1]
 
@@ -289,7 +358,8 @@ def compute_recommendation(
     else:
         avg_dollar_volume = rolling_dollar_volume.iloc[-1]
 
-    expected_move = str(round(straddle / underlying_price * 100, 2)) + "%" if straddle else None
+    expected_move_straddle = (straddle / underlying_price).round(3) if straddle else None
+    prev_earnings_avg_abs_pct_move, prev_earnings_median_abs_pct_move, prev_earnings_min_abs_pct_move, prev_earnings_max_abs_pct_move, earnings_release_time = calc_prev_avg_earnings_move(df_history.reset_index(), stock, plot_loc=plot_loc)
 
     result_summary = {
         "avg_30d_dollar_volume": round(avg_dollar_volume, 3),
@@ -303,21 +373,34 @@ def compute_recommendation(
         "underlying_price": underlying_price,
         "call_spread": (call_bid, call_ask),
         "put_spread": (put_bid, put_ask),
-        "expected_move": expected_move,
+        "expected_move_straddle": (expected_move_straddle * 100).round(3).astype(str) + "%",
+        "straddle_pct_move_ge_hist_pct_move_pass": expected_move_straddle >= prev_earnings_avg_abs_pct_move,
+        "prev_earnings_avg_abs_pct_move": (prev_earnings_avg_abs_pct_move * 100).round(3).astype(str) + "%",
+        "prev_earnings_median_abs_pct_move": (prev_earnings_median_abs_pct_move * 100).round(3).astype(str) + "%",
+        "prev_earnings_min_abs_pct_move": (prev_earnings_min_abs_pct_move * 100).round(3).astype(str) + "%",
+        "prev_earnings_max_abs_pct_move": (prev_earnings_max_abs_pct_move * 100).round(3).astype(str) + "%",
+        "earnings_release_time": earnings_release_time
     }
 
     if (
-            result_summary["avg_30d_dollar_volume_pass"]
-            and result_summary["iv30_rv30_pass"]
-            and result_summary["ts_slope_0_45_pass"]
-            and result_summary["avg_30d_share_volume_pass"]
+        result_summary["avg_30d_dollar_volume_pass"]
+        and result_summary["iv30_rv30_pass"]
+        and result_summary["ts_slope_0_45_pass"]
+        and result_summary["avg_30d_share_volume_pass"]
+        and result_summary["underlying_price"] >= MIN_SHARE_PRICE
+        and result_summary["straddle_pct_move_ge_hist_pct_move_pass"]
+        and expected_move_straddle > prev_earnings_min_abs_pct_move  # safety filter in case of bad data
     ):
         suggestion = "Recommended"
+    elif result_summary["ts_slope_0_45_pass"] and result_summary["avg_30d_dollar_volume_pass"] and result_summary["iv30_rv30_pass"] and expected_move_straddle * 1.5 < prev_earnings_min_abs_pct_move:
+        suggestion = "Strong Consider..."
+    elif result_summary["ts_slope_0_45_pass"] and result_summary["avg_30d_dollar_volume_pass"] and result_summary["iv30_rv30_pass"]:
+        suggestion = "Consider..."
     elif result_summary["ts_slope_0_45_pass"] and (
             (result_summary["avg_30d_dollar_volume_pass"] and not result_summary["iv30_rv30_pass"])
             or (result_summary["iv30_rv30_pass"] and not result_summary["avg_30d_dollar_volume_pass"])
     ):
-        suggestion = "Consider"
+        suggestion = "Eh... Really Consider, it's risky!"
     else:
         suggestion = "Avoid"
 
@@ -337,9 +420,16 @@ def compute_recommendation(
     if avg_dollar_volume > 50_000_000:
         edge_score += 0.5
 
+    # Straddle expected pct change >= avg earnings pct change
+    if expected_move_straddle >= prev_earnings_avg_abs_pct_move:
+        edge_score += 1.0
+
     if suggestion == "Recommended":
-        # Map score to Kelly multiplier
-        if edge_score >= 2.0:
+        if edge_score >= 3.0:
+            kelly_multiplier_from_base = 2.0
+        elif edge_score >= 2.5:
+            kelly_multiplier_from_base = 1.75
+        elif edge_score >= 2.0:
             kelly_multiplier_from_base = 1.5
         elif edge_score >= 1.5:
             kelly_multiplier_from_base = 1.25
