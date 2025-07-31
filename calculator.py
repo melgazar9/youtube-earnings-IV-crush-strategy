@@ -322,7 +322,11 @@ def compute_recommendation(
                 straddle = call_mid + put_mid
             else:
                 warnings.warn(f"For ticker {ticker} straddle is either 0 or None from available bid/ask spread... using lastPrice.")
-                straddle = calls.iloc[call_idx]["lastPrice"] + puts.iloc[call_idx]["lastPrice"]
+                try:
+                    straddle = calls.iloc[call_idx]["lastPrice"] + puts.iloc[call_idx]["lastPrice"]
+                except IndexError:
+                    warnings.warn(f"For ticker {ticker}, call_idx {call_idx} is out of bounds in calls/puts.")
+                    return None
         i += 1
 
     if not atm_iv:
