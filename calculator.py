@@ -20,8 +20,9 @@ MIN_AVG_30D_SHARE_VOLUME = 1_500_500
 MIN_IV30_RV30 = 1.35
 MAX_TS_SLOPE_0_45 = -0.0050
 MIN_SHARE_PRICE = 15
-EARNINGS_LOOKBACK_DAYS_FOR_AGG = 365*3
+EARNINGS_LOOKBACK_DAYS_FOR_AGG = 365 * 3
 PLOT_LOC = "/Users/melgazar9/tmp_plots/"
+
 
 def filter_dates(dates):
     today = datetime.today().date()
@@ -177,9 +178,11 @@ def get_all_usa_tickers(use_yf_db=True, earnings_date=datetime.today().strftime(
     nasdaq_tickers = sorted(df_nasdaq["symbol"].unique().tolist())
 
     all_usa_earnings_tickers_today = sorted(list(set(fmp_usa_symbols + nasdaq_tickers)))
+
     return all_usa_earnings_tickers_today
 
-def calc_prev_avg_earnings_move(df_history, ticker_obj, days_back=EARNINGS_LOOKBACK_DAYS_FOR_AGG, plot_loc=PLOT_LOC):
+
+def calc_prev_avg_earnings_move(df_history, ticker_obj, plot_loc=PLOT_LOC):
     df_history = df_history.copy()
     if "Date" not in df_history.columns and df_history.index.name == "Date":
         df_history = df_history.reset_index()
@@ -201,7 +204,7 @@ def calc_prev_avg_earnings_move(df_history, ticker_obj, days_back=EARNINGS_LOOKB
             return "pre-market"
         elif hour >= 9:
             return "post-market"
-    
+
     df_earnings_dates["release_timing"] = df_earnings_dates["Earnings Date"].apply(classify_release)
     df_earnings = df_earnings_dates.merge(df_history, on="Date", how="left", suffixes=('', '_earnings'))
     df_earnings["next_date"] = df_earnings["Date"] + pd.Timedelta(days=1)
@@ -210,7 +213,7 @@ def calc_prev_avg_earnings_move(df_history, ticker_obj, days_back=EARNINGS_LOOKB
     df_flat["prev_close"] = df_flat["Close"].shift(1)
     df_flat["pre_market_move"] = (df_flat["Open"] - df_flat["prev_close"]) / df_flat["prev_close"]
     df_flat["post_market_move"] = (df_flat["Open_next"] - df_flat["Close"]) / df_flat["Close"]
-    
+
     df_flat["earnings_move"] = df_flat.apply(
         lambda row: row["pre_market_move"] if row["release_timing"] == "pre-market"
         else row["post_market_move"] if row["release_timing"] == "post-market"
@@ -225,7 +228,7 @@ def calc_prev_avg_earnings_move(df_history, ticker_obj, days_back=EARNINGS_LOOKB
             y=df_flat["earnings_move"].round(3),
             color=df_flat.index.astype(str),
             text=df_flat["text"],
-            title="Earnings % Move", 
+            title="Earnings % Move",
         )
         p.update_traces(textangle=0)
         # p.show()
@@ -236,13 +239,15 @@ def calc_prev_avg_earnings_move(df_history, ticker_obj, days_back=EARNINGS_LOOKB
         print(f"Saved plot for ticker {ticker} here: {full_path}")
 
     avg_abs_pct_move = round(abs(df_flat["earnings_move"]).mean(), 3)
+    prev_earnings_std = round(abs(df_flat["earnings_move"]).std(ddof=1), 3)
     median_abs_pct_move = round(abs(df_flat["earnings_move"]).median(), 3)
     min_abs_pct_move = round(abs(df_flat["earnings_move"]).min(), 3)
     max_abs_pct_move = round(abs(df_flat["earnings_move"]).max(), 3)
     earnings_release_timing_mode = df_flat["release_timing"].mode()
     release_time = earnings_release_timing_mode.iloc[0] if not earnings_release_timing_mode.empty else "unknown"
 
-    return avg_abs_pct_move, median_abs_pct_move, min_abs_pct_move, max_abs_pct_move, release_time
+    return avg_abs_pct_move, median_abs_pct_move, min_abs_pct_move, max_abs_pct_move, prev_earnings_std, release_time
+
 
 def compute_recommendation(
         ticker,
@@ -273,10 +278,13 @@ def compute_recommendation(
     for exp_date in exp_dates:
         options_chains[exp_date] = stock.option_chain(exp_date)
 
-    df_history = stock.history(start=(datetime.today() - timedelta(days=EARNINGS_LOOKBACK_DAYS_FOR_AGG)).strftime("%Y-%m-%d"))
+    df_history = stock.history(
+        start=(datetime.today() - timedelta(days=EARNINGS_LOOKBACK_DAYS_FOR_AGG)).strftime("%Y-%m-%d"))
+
     # df_price_history_3mo = stock.history(period="3mo")
 
-    df_price_history_3mo = df_history[df_history.index >= (pd.Timestamp.now(df_history.index.tz) - relativedelta(months=3))]
+    df_price_history_3mo = df_history[
+        df_history.index >= (pd.Timestamp.now(df_history.index.tz) - relativedelta(months=3))]
     # df_price_history_3mo = df_history[df_history.index >= (datetime.now(pytz.timezone("America/New_York")) - relativedelta(months=3))]
     df_price_history_3mo = df_price_history_3mo.sort_index()
     df_price_history_3mo["dollar_volume"] = df_price_history_3mo["Volume"] * df_price_history_3mo["Close"]
@@ -294,41 +302,42 @@ def compute_recommendation(
     for exp_date, chain in options_chains.items():
         calls = chain.calls
         puts = chain.puts
-    
+
         if calls is None or puts is None or calls.empty or puts.empty:
             continue
-    
+
         call_diffs = (calls["strike"] - underlying_price).abs()
         call_idx = call_diffs.idxmin()
         call_iv = calls.loc[call_idx, "impliedVolatility"]
-    
+
         put_diffs = (puts["strike"] - underlying_price).abs()
         put_idx = put_diffs.idxmin()
         put_iv = puts.loc[put_idx, "impliedVolatility"]
-    
+
         atm_iv_value = (call_iv + put_iv) / 2.0
         atm_iv[exp_date] = atm_iv_value
-    
+
         if i == 0:
             call_bid = calls.loc[call_idx, "bid"]
             call_ask = calls.loc[call_idx, "ask"]
             put_bid = puts.loc[put_idx, "bid"]
             put_ask = puts.loc[put_idx, "ask"]
-    
+
             if call_bid is not None and call_ask is not None:
                 call_mid = (call_bid + call_ask) / 2.0
             else:
                 call_mid = None
-    
+
             if put_bid is not None and put_ask is not None:
                 put_mid = (put_bid + put_ask) / 2.0
             else:
                 put_mid = None
-    
+
             if call_mid is not None and put_mid is not None and call_mid != 0 and put_mid != 0:
                 straddle = call_mid + put_mid
             else:
-                warnings.warn(f"For ticker {ticker} straddle is either 0 or None from available bid/ask spread... using lastPrice.")
+                warnings.warn(
+                    f"For ticker {ticker} straddle is either 0 or None from available bid/ask spread... using lastPrice.")
                 try:
                     straddle = calls.iloc[call_idx]["lastPrice"] + puts.iloc[call_idx]["lastPrice"]
                 except IndexError:
@@ -370,7 +379,11 @@ def compute_recommendation(
         avg_dollar_volume = rolling_dollar_volume.iloc[-1]
 
     expected_move_straddle = (straddle / underlying_price).round(3) if straddle else None
-    prev_earnings_avg_abs_pct_move, prev_earnings_median_abs_pct_move, prev_earnings_min_abs_pct_move, prev_earnings_max_abs_pct_move, earnings_release_time = calc_prev_avg_earnings_move(df_history.reset_index(), stock, plot_loc=plot_loc)
+
+    (
+        prev_earnings_avg_abs_pct_move, prev_earnings_median_abs_pct_move, prev_earnings_min_abs_pct_move,
+        prev_earnings_max_abs_pct_move, prev_earnings_std, earnings_release_time
+     ) = calc_prev_avg_earnings_move(df_history.reset_index(), stock, plot_loc=plot_loc)
 
     result_summary = {
         "avg_30d_dollar_volume": round(avg_dollar_volume, 3),
@@ -394,26 +407,53 @@ def compute_recommendation(
     }
 
     if (
-        result_summary["avg_30d_dollar_volume_pass"]
-        and result_summary["iv30_rv30_pass"]
-        and result_summary["ts_slope_0_45_pass"]
-        and result_summary["avg_30d_share_volume_pass"]
-        and result_summary["underlying_price"] >= MIN_SHARE_PRICE
-        and result_summary["straddle_pct_move_ge_hist_pct_move_pass"]
-        and expected_move_straddle > prev_earnings_min_abs_pct_move  # safety filter in case of bad data
+            result_summary["avg_30d_dollar_volume_pass"]
+            and result_summary["iv30_rv30_pass"]
+            and result_summary["ts_slope_0_45_pass"]
+            and result_summary["avg_30d_share_volume_pass"]
     ):
-        suggestion = "Recommended"
-    elif result_summary["ts_slope_0_45_pass"] and result_summary["avg_30d_dollar_volume_pass"] and result_summary["iv30_rv30_pass"] and expected_move_straddle * 1.5 < prev_earnings_min_abs_pct_move:
-        suggestion = "Strong Consider..."
-    elif result_summary["ts_slope_0_45_pass"] and result_summary["avg_30d_dollar_volume_pass"] and result_summary["iv30_rv30_pass"]:
-        suggestion = "Consider..."
+        original_suggestion = "Recommended"
     elif result_summary["ts_slope_0_45_pass"] and (
             (result_summary["avg_30d_dollar_volume_pass"] and not result_summary["iv30_rv30_pass"])
             or (result_summary["iv30_rv30_pass"] and not result_summary["avg_30d_dollar_volume_pass"])
     ):
-        suggestion = "Eh... Really Consider, it's risky!"
+        original_suggestion = "Consider"
     else:
-        suggestion = "Avoid"
+        original_suggestion = "Avoid"
+
+    if (
+            result_summary["avg_30d_dollar_volume_pass"]
+            and result_summary["iv30_rv30_pass"]
+            and result_summary["ts_slope_0_45_pass"]
+            and result_summary["avg_30d_share_volume_pass"]
+            and result_summary["underlying_price"] >= MIN_SHARE_PRICE
+            and result_summary["straddle_pct_move_ge_hist_pct_move_pass"]
+            and expected_move_straddle > prev_earnings_min_abs_pct_move  # safety filter - data quality check
+    ):
+        improved_suggestion = "Highly Recommended"
+    elif (
+            result_summary["avg_30d_dollar_volume_pass"]
+            and result_summary["iv30_rv30_pass"]
+            and result_summary["ts_slope_0_45_pass"]
+            and result_summary["avg_30d_share_volume_pass"]
+            and result_summary["underlying_price"] >= MIN_SHARE_PRICE
+            and expected_move_straddle * prev_earnings_std >= prev_earnings_avg_abs_pct_move
+            and expected_move_straddle > prev_earnings_min_abs_pct_move  # safety filter - data quality check
+    ):
+        improved_suggestion = "Slightly Recommended"
+    elif result_summary["ts_slope_0_45_pass"] and result_summary["avg_30d_dollar_volume_pass"] and result_summary[
+        "iv30_rv30_pass"] and expected_move_straddle * 1.5 < prev_earnings_min_abs_pct_move:
+        improved_suggestion = "Consider..."
+    elif result_summary["ts_slope_0_45_pass"] and result_summary["avg_30d_dollar_volume_pass"] and result_summary[
+        "iv30_rv30_pass"]:
+        improved_suggestion = "Original Consider..."
+    elif result_summary["ts_slope_0_45_pass"] and (
+            (result_summary["avg_30d_dollar_volume_pass"] and not result_summary["iv30_rv30_pass"])
+            or (result_summary["iv30_rv30_pass"] and not result_summary["avg_30d_dollar_volume_pass"])
+    ):
+        improved_suggestion = "Eh... Consider, but it's risky!"
+    else:
+        improved_suggestion = "Avoid"
 
     edge_score = 0
 
@@ -435,7 +475,7 @@ def compute_recommendation(
     if expected_move_straddle >= prev_earnings_avg_abs_pct_move:
         edge_score += 1.0
 
-    if suggestion == "Recommended":
+    if improved_suggestion == "Recommended":
         if edge_score >= 3.0:
             kelly_multiplier_from_base = 2.0
         elif edge_score >= 2.5:
@@ -450,12 +490,13 @@ def compute_recommendation(
             kelly_multiplier_from_base = 1.0
         elif edge_score == 0:
             kelly_multiplier_from_base = 0.80
-    elif suggestion == "Consider":
+    elif improved_suggestion == "Consider":
         kelly_multiplier_from_base = 0.2
     else:
         kelly_multiplier_from_base = 0
 
-    result_summary["suggestion"] = suggestion
+    result_summary["improved_suggestion"] = improved_suggestion
+    result_summary["original_suggestion"] = original_suggestion
     kelly_bet = calc_kelly_bet()
 
     kelly_bet = round(kelly_bet * kelly_multiplier_from_base, 2)
@@ -487,7 +528,7 @@ if __name__ == "__main__":
 
     for ticker in tickers:
         result = compute_recommendation(ticker)
-        is_edge = isinstance(result, dict) and result.get("suggestion") == "Recommended"
+        is_edge = isinstance(result, dict) and result.get("improved_suggestion") == "Recommended"
         if is_edge:
             print(" *** EDGE FOUND ***")
 
