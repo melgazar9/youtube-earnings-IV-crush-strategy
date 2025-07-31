@@ -486,11 +486,11 @@ def compute_recommendation(
             and expected_move_straddle > prev_earnings_min_abs_pct_move  # Safety filter - data quality check
     ):
         improved_suggestion = "Recommended"
-    elif result_summary["ts_slope_0_45_pass"] and result_summary["avg_30d_dollar_volume_pass"] and result_summary[
-        "iv30_rv30_pass"] and expected_move_straddle * 1.5 < prev_earnings_min_abs_pct_move:
+    elif (result_summary["ts_slope_0_45_pass"] and result_summary["avg_30d_dollar_volume_pass"] and
+          result_summary["iv30_rv30_pass"] and expected_move_straddle * 1.5 < prev_earnings_min_abs_pct_move):
         improved_suggestion = "Consider..."
-    elif result_summary["ts_slope_0_45_pass"] and result_summary["avg_30d_dollar_volume_pass"] and result_summary[
-        "iv30_rv30_pass"]:
+    elif (result_summary["ts_slope_0_45_pass"] and result_summary["avg_30d_dollar_volume_pass"] and result_summary["iv30_rv30_pass"]
+          and result_summary["underlying_price"] >= MIN_SHARE_PRICE / 2):
         improved_suggestion = "Slightly Consider..."
     elif result_summary["ts_slope_0_45_pass"] and (
             (result_summary["avg_30d_dollar_volume_pass"] and not result_summary["iv30_rv30_pass"])
