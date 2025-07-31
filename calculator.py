@@ -416,6 +416,9 @@ def compute_recommendation(
         prev_earnings_max_abs_pct_move, prev_earnings_std, earnings_release_time, prev_earnings_values
      ) = calc_prev_earnings_stats(df_history.reset_index(), stock, ticker, plot_loc=plot_loc)
 
+    if not prev_earnings_values:
+        prev_earnings_values = []
+
     result_summary = {
         "avg_30d_dollar_volume": round(avg_dollar_volume, 3),
         "avg_30d_dollar_volume_pass": avg_dollar_volume >= min_avg_30d_dollar_volume,
@@ -434,7 +437,7 @@ def compute_recommendation(
         "prev_earnings_median_abs_pct_move": str(round(prev_earnings_median_abs_pct_move * 100, 3)) + "%",
         "prev_earnings_min_abs_pct_move": str(round(prev_earnings_min_abs_pct_move * 100, 3)) + "%",
         "prev_earnings_max_abs_pct_move": str(round(prev_earnings_max_abs_pct_move * 100, 3)) + "%",
-        "prev_earnings_values": [str(round(v * 100, 3)) + "%" for v in prev_earnings_values],
+        "prev_earnings_values": prev_earnings_values,
         "earnings_release_time": earnings_release_time
     }
 
