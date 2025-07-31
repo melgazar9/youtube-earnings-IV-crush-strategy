@@ -491,7 +491,7 @@ def compute_recommendation(
         improved_suggestion = "Consider..."
     elif result_summary["ts_slope_0_45_pass"] and result_summary["avg_30d_dollar_volume_pass"] and result_summary[
         "iv30_rv30_pass"]:
-        improved_suggestion = "Original Consider..."
+        improved_suggestion = "Slightly Consider..."
     elif result_summary["ts_slope_0_45_pass"] and (
             (result_summary["avg_30d_dollar_volume_pass"] and not result_summary["iv30_rv30_pass"])
             or (result_summary["iv30_rv30_pass"] and not result_summary["avg_30d_dollar_volume_pass"])
