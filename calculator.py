@@ -416,7 +416,7 @@ def compute_recommendation(
         prev_earnings_max_abs_pct_move, prev_earnings_std, earnings_release_time, prev_earnings_values
      ) = calc_prev_earnings_stats(df_history.reset_index(), stock, ticker, plot_loc=plot_loc)
 
-    if not prev_earnings_values:
+    if prev_earnings_values is None or not len(prev_earnings_values):
         prev_earnings_values = []
 
     result_summary = {
