@@ -20,7 +20,7 @@ MIN_IV30_RV30 = 1.35
 MAX_TS_SLOPE_0_45 = -0.0050
 MIN_SHARE_PRICE = 15
 EARNINGS_LOOKBACK_DAYS_FOR_AGG = 365 * 3
-PLOT_LOC = "/Users/melgazar9/tmp_plots/"
+PLOT_LOC = f"{os.path.expanduser("~/")}tmp_plots/"
 
 
 def filter_dates(dates):
