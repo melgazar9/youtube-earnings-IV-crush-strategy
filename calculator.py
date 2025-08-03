@@ -20,7 +20,7 @@ MIN_IV30_RV30 = 1.35
 MAX_TS_SLOPE_0_45 = -0.0050
 MIN_SHARE_PRICE = 15
 EARNINGS_LOOKBACK_DAYS_FOR_AGG = 365 * 3
-PLOT_LOC = f"{os.path.expanduser("~/")}tmp_plots/"
+PLOT_LOC = None # f"{os.path.expanduser("~/")}tmp_plots/"
 
 
 def filter_dates(dates):
@@ -256,7 +256,6 @@ def calc_prev_earnings_stats(df_history, ticker_obj, ticker, plot_loc=PLOT_LOC):
         prev_earnings_std = 0.001  # avoid division by 0 or overly tight thresholds
 
     return avg_abs_pct_move, median_abs_pct_move, min_abs_pct_move, max_abs_pct_move, prev_earnings_std, release_time, prev_earnings_values
-
 
 def compute_recommendation(
         ticker,
@@ -503,51 +502,49 @@ def compute_recommendation(
     edge_score = 0
 
     # IV to RV ratio
-    if iv30_rv30 > 2.0:
-        edge_score += 1.0
-    elif iv30_rv30 > 1.5:
-        edge_score += 0.5
+    ivrv_deciles = [
+        (1.1789, 1.2559, 1.01),  # ~1% edge
+        (1.2559, 1.3373, 1.0175),  # ~1.75% edge
+        (1.3373, 1.4333, 1.001),  # ~0.1% edge
+        (1.4333, 1.5605, 1.0235),  # ~2.35% edge
+        (1.5605, 1.7768, 1.0265),  # ~2.65% edge
+    ]
+
+    ivrv_edge_multiplier = 1.0
+
+    for low, high, mult in ivrv_deciles:
+        if low <= iv30_rv30 < high:
+            ivrv_edge_multiplier = mult
+            break
+
+    edge_score += ivrv_edge_multiplier
 
     # Term structure slope
     if ts_slope_0_45 < -0.01:
-        edge_score += 0.5
+        edge_score += 0.02  # assume 2% edge... will test more later
 
     # Liquidity
     if avg_dollar_volume > 50_000_000:
-        edge_score += 0.5
+        edge_score += 0.015   # assume 1.5% edge... will test more later
 
     # Straddle expected pct change >= avg earnings pct change
     if expected_move_straddle >= prev_earnings_avg_abs_pct_move:
-        edge_score += 1.0
-
-    if "Recommended" in improved_suggestion:
-        if edge_score >= 3.0:
-            kelly_multiplier_from_base = 2.0
-        elif edge_score >= 2.5:
-            kelly_multiplier_from_base = 1.75
-        elif edge_score >= 2.0:
-            kelly_multiplier_from_base = 1.5
-        elif edge_score >= 1.5:
-            kelly_multiplier_from_base = 1.25
-        elif edge_score >= 1:
-            kelly_multiplier_from_base = 1.125
-        elif edge_score >= 0.5:
-            kelly_multiplier_from_base = 1.0
-        elif edge_score == 0:
-            kelly_multiplier_from_base = 0.80
-    elif "Consider" in improved_suggestion:
-        kelly_multiplier_from_base = 0.5
-    elif original_suggestion == "Consider":
-        kelly_multiplier_from_base = 0.2
-    else:
-        kelly_multiplier_from_base = 0
+        edge_score += 0.05  # 5% edge
 
     result_summary["improved_suggestion"] = improved_suggestion
     result_summary["original_suggestion"] = original_suggestion
     kelly_bet = calc_kelly_bet()
 
-    kelly_bet = round(kelly_bet * kelly_multiplier_from_base, 2)
-    result_summary["kelly_multiplier_from_base"] = kelly_multiplier_from_base
+    if "Recommended" in improved_suggestion:
+        kelly_bet = round(kelly_bet * edge_score, 2)
+    elif "Consider" in improved_suggestion:
+        kelly_bet = round((kelly_bet * edge_score) / 3, 2)
+    elif original_suggestion == "Consider":
+        kelly_bet = round((kelly_bet * edge_score) / 5, 2)
+    else:
+        kelly_bet = 0
+
+    result_summary["edge_score"] = edge_score
     result_summary["kelly_bet"] = kelly_bet
     return result_summary
 
