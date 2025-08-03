@@ -254,8 +254,153 @@ def calc_prev_earnings_stats(df_history, ticker_obj, ticker, plot_loc=PLOT_LOC):
 
     if prev_earnings_std < 0.001:
         prev_earnings_std = 0.001  # avoid division by 0 or overly tight thresholds
-
     return avg_abs_pct_move, median_abs_pct_move, min_abs_pct_move, max_abs_pct_move, prev_earnings_std, release_time, prev_earnings_values
+
+def _update_result_summary(
+        result_summary,
+        expected_move_straddle,
+        prev_earnings_min_abs_pct_move,
+        prev_earnings_avg_abs_pct_move,
+        prev_earnings_std,
+        iv30_rv30,
+        ts_slope_0_45,
+        avg_dollar_volume
+):
+    """Update based on estimated probabilties, done in-place """
+    if (
+            result_summary["avg_30d_dollar_volume_pass"]
+            and result_summary["iv30_rv30_pass"]
+            and result_summary["ts_slope_0_45_pass"]
+            and result_summary["avg_30d_share_volume_pass"]
+    ):
+        original_suggestion = "Recommended"
+    elif result_summary["ts_slope_0_45_pass"] and (
+            (result_summary["avg_30d_dollar_volume_pass"] and not result_summary["iv30_rv30_pass"])
+            or (result_summary["iv30_rv30_pass"] and not result_summary["avg_30d_dollar_volume_pass"])
+    ):
+        original_suggestion = "Consider"
+    else:
+        original_suggestion = "Avoid"
+
+    if (
+            result_summary["avg_30d_dollar_volume_pass"]
+            and result_summary["iv30_rv30_pass"]
+            and result_summary["ts_slope_0_45_pass"]
+            and result_summary["avg_30d_share_volume_pass"]
+            and result_summary["underlying_price"] >= MIN_SHARE_PRICE
+            and result_summary["straddle_pct_move_ge_hist_pct_move_pass"]
+            and expected_move_straddle > prev_earnings_min_abs_pct_move  # safety filter - data quality check
+    ):
+        improved_suggestion = "Highly Recommended"
+    elif (
+            result_summary["avg_30d_dollar_volume_pass"]
+            and result_summary["iv30_rv30_pass"]
+            and result_summary["ts_slope_0_45_pass"]
+            and result_summary["avg_30d_share_volume_pass"]
+            and result_summary["underlying_price"] >= MIN_SHARE_PRICE
+            and prev_earnings_avg_abs_pct_move - expected_move_straddle <= 0.75 * prev_earnings_std  # Avg move - Straddle is within 0.75 std deviations
+            and expected_move_straddle > prev_earnings_min_abs_pct_move  # Safety filter - data quality check
+    ):
+        improved_suggestion = "Slightly Recommended"
+    elif (
+            result_summary["avg_30d_dollar_volume_pass"]
+            and result_summary["iv30_rv30_pass"]
+            and result_summary["ts_slope_0_45_pass"]
+            and result_summary["avg_30d_share_volume_pass"]
+            and result_summary["underlying_price"] >= MIN_SHARE_PRICE
+            and prev_earnings_avg_abs_pct_move - expected_move_straddle <= 0.50 * prev_earnings_std  # Avg move - Straddle is within 0.50 std deviations
+            and expected_move_straddle > prev_earnings_min_abs_pct_move  # Safety filter - data quality check
+    ):
+        improved_suggestion = "Recommended"
+    elif (result_summary["ts_slope_0_45_pass"] and result_summary["avg_30d_dollar_volume_pass"] and
+          result_summary["iv30_rv30_pass"] and expected_move_straddle * 1.5 < prev_earnings_min_abs_pct_move):
+        improved_suggestion = "Consider..."
+    elif (result_summary["ts_slope_0_45_pass"] and result_summary["avg_30d_dollar_volume_pass"] and result_summary["iv30_rv30_pass"]
+          and result_summary["underlying_price"] >= MIN_SHARE_PRICE / 2):
+        improved_suggestion = "Slightly Consider..."
+    elif result_summary["ts_slope_0_45_pass"] and (
+            (result_summary["avg_30d_dollar_volume_pass"] and not result_summary["iv30_rv30_pass"])
+            or (result_summary["iv30_rv30_pass"] and not result_summary["avg_30d_dollar_volume_pass"])
+    ):
+        improved_suggestion = "Eh... Consider, but it's risky!"
+    else:
+        improved_suggestion = "Avoid"
+
+    # IV to RV ratio
+    ivrv_deciles = [
+        (1.1789, 1.2559, 1.01),  # ~1% edge
+        (1.2559, 1.3373, 1.0175),  # ~1.75% edge
+        (1.3373, 1.4333, 1.001),  # ~0.1% edge
+        (1.4333, 1.5605, 1.0235),  # ~2.35% edge
+        (1.5605, 1.7768, 1.0265),  # ~2.65% edge
+    ]
+
+    # Term structure slope deciles with edge multipliers
+    ts_deciles = [
+        (-0.8323, -0.0156, 1.125),  # 12.5% more edge
+        (-0.0156, -0.0090, 1.11),  # 11% more edge
+        (-0.0090, -0.0059, 1.075),  # 7.5% more edge
+        (-0.0059, -0.0041, 1.051),  # 5.1% more edge
+        (-0.0041, -0.0028, 1.018),  # 1.8% more edge
+    ]
+
+    # Share volume deciles with edge multipliers -- original youtube analysis
+    # share_volume_deciles = [
+    #     (1957709, 2665545, 1.0175),  # 1.75% more edge
+    #     (2665545, 3981270, 1.0285),  # 2.85% more edge
+    #     (3981270, 7222558, 1.038),  # 3.8% more edge
+    #     (7222558, 737093575, 1.042),  # 4.2% more edge
+    # ]
+
+    # Attempt to map the share volume to dollar volume buckets
+    dollar_volume_deciles = [
+        (5000000, 50000000, 1.0175),
+        (50000000, 200000000, 1.0285),
+        (200000000, 1000000000, 1.038),
+        (1000000000, 100000000000, 1.042),
+    ]
+
+    # Find multipliers for each factor
+    ivrv_multiplier = 1.0
+    for low, high, mult in ivrv_deciles:
+        if low <= iv30_rv30 < high:
+            ivrv_multiplier = mult
+            break
+
+    ts_multiplier = 1.0
+    for low, high, mult in ts_deciles:
+        if low <= ts_slope_0_45 < high:
+            ts_multiplier = mult
+            break
+
+    volume_multiplier = 1.0
+    for low, high, mult in dollar_volume_deciles:
+        if low <= avg_dollar_volume < high:
+            volume_multiplier = mult
+            break
+
+    total_edge_multiplier = round(ivrv_multiplier * ts_multiplier * volume_multiplier, 3)
+
+    # Straddle expected pct change >= avg earnings pct change
+    if expected_move_straddle >= prev_earnings_avg_abs_pct_move:
+        total_edge_multiplier += min(0.075, (expected_move_straddle - prev_earnings_avg_abs_pct_move) / prev_earnings_avg_abs_pct_move) # estimate maximum 7.5% edge
+
+    result_summary["improved_suggestion"] = improved_suggestion
+    result_summary["original_suggestion"] = original_suggestion
+    base_kelly_bet = calc_kelly_bet()
+
+    if "Recommended" in improved_suggestion:
+        adjusted_kelly_bet = round(base_kelly_bet * total_edge_multiplier, 2)
+    elif "Consider" in improved_suggestion:
+        adjusted_kelly_bet = round((base_kelly_bet * total_edge_multiplier) / 2, 2)
+    elif original_suggestion == "Consider":
+        adjusted_kelly_bet = round((base_kelly_bet * total_edge_multiplier) / 5, 2)
+    else:
+        adjusted_kelly_bet = 0
+
+    result_summary["total_edge_multiplier"] = total_edge_multiplier
+    result_summary["base_kelly_bet"] = base_kelly_bet
+    result_summary["adjusted_kelly_bet"] = adjusted_kelly_bet
 
 def compute_recommendation(
         ticker,
@@ -436,116 +581,20 @@ def compute_recommendation(
         "prev_earnings_median_abs_pct_move": str(round(prev_earnings_median_abs_pct_move * 100, 3)) + "%",
         "prev_earnings_min_abs_pct_move": str(round(prev_earnings_min_abs_pct_move * 100, 3)) + "%",
         "prev_earnings_max_abs_pct_move": str(round(prev_earnings_max_abs_pct_move * 100, 3)) + "%",
-        "prev_earnings_values": prev_earnings_values,
+        "prev_earnings_values": [str(round(i * 100, 3)) + "%" for i in prev_earnings_values],
         "earnings_release_time": earnings_release_time
     }
 
-    if (
-            result_summary["avg_30d_dollar_volume_pass"]
-            and result_summary["iv30_rv30_pass"]
-            and result_summary["ts_slope_0_45_pass"]
-            and result_summary["avg_30d_share_volume_pass"]
-    ):
-        original_suggestion = "Recommended"
-    elif result_summary["ts_slope_0_45_pass"] and (
-            (result_summary["avg_30d_dollar_volume_pass"] and not result_summary["iv30_rv30_pass"])
-            or (result_summary["iv30_rv30_pass"] and not result_summary["avg_30d_dollar_volume_pass"])
-    ):
-        original_suggestion = "Consider"
-    else:
-        original_suggestion = "Avoid"
-
-    if (
-            result_summary["avg_30d_dollar_volume_pass"]
-            and result_summary["iv30_rv30_pass"]
-            and result_summary["ts_slope_0_45_pass"]
-            and result_summary["avg_30d_share_volume_pass"]
-            and result_summary["underlying_price"] >= MIN_SHARE_PRICE
-            and result_summary["straddle_pct_move_ge_hist_pct_move_pass"]
-            and expected_move_straddle > prev_earnings_min_abs_pct_move  # safety filter - data quality check
-    ):
-        improved_suggestion = "Highly Recommended"
-    elif (
-            result_summary["avg_30d_dollar_volume_pass"]
-            and result_summary["iv30_rv30_pass"]
-            and result_summary["ts_slope_0_45_pass"]
-            and result_summary["avg_30d_share_volume_pass"]
-            and result_summary["underlying_price"] >= MIN_SHARE_PRICE
-            and prev_earnings_avg_abs_pct_move - expected_move_straddle <= 0.75 * prev_earnings_std  # Avg move - Straddle is within 0.75 std deviations
-            and expected_move_straddle > prev_earnings_min_abs_pct_move  # Safety filter - data quality check
-    ):
-        improved_suggestion = "Slightly Recommended"
-    elif (
-            result_summary["avg_30d_dollar_volume_pass"]
-            and result_summary["iv30_rv30_pass"]
-            and result_summary["ts_slope_0_45_pass"]
-            and result_summary["avg_30d_share_volume_pass"]
-            and result_summary["underlying_price"] >= MIN_SHARE_PRICE
-            and prev_earnings_avg_abs_pct_move - expected_move_straddle <= 0.50 * prev_earnings_std  # Avg move - Straddle is within 0.50 std deviations
-            and expected_move_straddle > prev_earnings_min_abs_pct_move  # Safety filter - data quality check
-    ):
-        improved_suggestion = "Recommended"
-    elif (result_summary["ts_slope_0_45_pass"] and result_summary["avg_30d_dollar_volume_pass"] and
-          result_summary["iv30_rv30_pass"] and expected_move_straddle * 1.5 < prev_earnings_min_abs_pct_move):
-        improved_suggestion = "Consider..."
-    elif (result_summary["ts_slope_0_45_pass"] and result_summary["avg_30d_dollar_volume_pass"] and result_summary["iv30_rv30_pass"]
-          and result_summary["underlying_price"] >= MIN_SHARE_PRICE / 2):
-        improved_suggestion = "Slightly Consider..."
-    elif result_summary["ts_slope_0_45_pass"] and (
-            (result_summary["avg_30d_dollar_volume_pass"] and not result_summary["iv30_rv30_pass"])
-            or (result_summary["iv30_rv30_pass"] and not result_summary["avg_30d_dollar_volume_pass"])
-    ):
-        improved_suggestion = "Eh... Consider, but it's risky!"
-    else:
-        improved_suggestion = "Avoid"
-
-    edge_score = 0
-
-    # IV to RV ratio
-    ivrv_deciles = [
-        (1.1789, 1.2559, 1.01),  # ~1% edge
-        (1.2559, 1.3373, 1.0175),  # ~1.75% edge
-        (1.3373, 1.4333, 1.001),  # ~0.1% edge
-        (1.4333, 1.5605, 1.0235),  # ~2.35% edge
-        (1.5605, 1.7768, 1.0265),  # ~2.65% edge
-    ]
-
-    ivrv_edge_multiplier = 1.0
-
-    for low, high, mult in ivrv_deciles:
-        if low <= iv30_rv30 < high:
-            ivrv_edge_multiplier = mult
-            break
-
-    edge_score += ivrv_edge_multiplier
-
-    # Term structure slope
-    if ts_slope_0_45 < -0.01:
-        edge_score += 0.02  # assume 2% edge... will test more later
-
-    # Liquidity
-    if avg_dollar_volume > 50_000_000:
-        edge_score += 0.015   # assume 1.5% edge... will test more later
-
-    # Straddle expected pct change >= avg earnings pct change
-    if expected_move_straddle >= prev_earnings_avg_abs_pct_move:
-        edge_score += 0.05  # 5% edge
-
-    result_summary["improved_suggestion"] = improved_suggestion
-    result_summary["original_suggestion"] = original_suggestion
-    kelly_bet = calc_kelly_bet()
-
-    if "Recommended" in improved_suggestion:
-        kelly_bet = round(kelly_bet * edge_score, 2)
-    elif "Consider" in improved_suggestion:
-        kelly_bet = round((kelly_bet * edge_score) / 3, 2)
-    elif original_suggestion == "Consider":
-        kelly_bet = round((kelly_bet * edge_score) / 5, 2)
-    else:
-        kelly_bet = 0
-
-    result_summary["edge_score"] = edge_score
-    result_summary["kelly_bet"] = kelly_bet
+    _update_result_summary(
+        result_summary,
+        expected_move_straddle,
+        prev_earnings_min_abs_pct_move,
+        prev_earnings_avg_abs_pct_move,
+        prev_earnings_std,
+        iv30_rv30,
+        ts_slope_0_45,
+        avg_dollar_volume
+    )
     return result_summary
 
 
