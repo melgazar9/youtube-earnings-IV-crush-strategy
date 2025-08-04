@@ -338,19 +338,19 @@ def _update_result_summary(
     # Term structure slope deciles with edge multipliers
     ts_deciles = [
         (-0.8323, -0.0156, 1.125),  # 12.5% more edge
-        (-0.0156, -0.0090, 1.11),  # 11% more edge
+        (-0.0156, -0.0090, 1.110),  # 11% more edge
         (-0.0090, -0.0059, 1.075),  # 7.5% more edge
         (-0.0059, -0.0041, 1.051),  # 5.1% more edge
         (-0.0041, -0.0028, 1.018),  # 1.8% more edge
     ]
 
     # Share volume deciles with edge multipliers -- original youtube analysis
-    # share_volume_deciles = [
-    #     (1957709, 2665545, 1.0175),  # 1.75% more edge
-    #     (2665545, 3981270, 1.0285),  # 2.85% more edge
-    #     (3981270, 7222558, 1.038),  # 3.8% more edge
-    #     (7222558, 737093575, 1.042),  # 4.2% more edge
-    # ]
+    share_volume_deciles = [
+        (1957709, 2665545, 1.0175),  # 1.75% more edge
+        (2665545, 3981270, 1.0285),  # 2.85% more edge
+        (3981270, 7222558, 1.038),  # 3.8% more edge
+        (7222558, 737093575, 1.042),  # 4.2% more edge
+    ]
 
     # Attempt to map the share volume to dollar volume buckets
     dollar_volume_deciles = [
@@ -373,11 +373,19 @@ def _update_result_summary(
             ts_multiplier = mult
             break
 
-    volume_multiplier = 1.0
+    dollar_volume_multiplier = 1.0
     for low, high, mult in dollar_volume_deciles:
         if low <= avg_dollar_volume < high:
-            volume_multiplier = mult
+            dollar_volume_multiplier = mult
             break
+
+    share_volume_multiplier = 1.0
+    for low, high, mult in dollar_volume_deciles:
+        if low <= avg_dollar_volume < high:
+            share_volume_multiplier = mult
+            break
+
+    volume_multiplier = max(share_volume_multiplier, dollar_volume_multiplier)
 
     total_edge_multiplier = round(ivrv_multiplier * ts_multiplier * volume_multiplier, 3)
 
