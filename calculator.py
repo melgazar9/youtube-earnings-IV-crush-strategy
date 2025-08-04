@@ -404,6 +404,7 @@ def _update_result_summary(
     elif original_suggestion == "Consider":
         adjusted_kelly_bet = round((base_kelly_bet * total_edge_multiplier) / 5, 2)
     else:
+        base_kelly_bet = 0
         adjusted_kelly_bet = 0
 
     result_summary["total_edge_multiplier"] = total_edge_multiplier
