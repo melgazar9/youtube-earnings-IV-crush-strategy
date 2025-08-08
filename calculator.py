@@ -426,57 +426,86 @@ def _update_result_summary(
         (1000000000, 100000000000, 1.042),
     ]
 
-    # Find multipliers for each factor
-    ivrv_multiplier = 1.0
-    for low, high, mult in ivrv_deciles:
+    ivrv_return = 1.0
+    for low, high, expected_return in ivrv_deciles:
         if low <= iv30_rv30 < high:
-            ivrv_multiplier = mult
+            ivrv_return = expected_return
             break
 
-    ts_multiplier = 1.0
-    for low, high, mult in ts_deciles:
+    ts_return = 1.0
+    for low, high, expected_return in ts_deciles:
         if low <= ts_slope_0_45 < high:
-            ts_multiplier = mult
+            ts_return = expected_return
             break
 
-    dollar_volume_multiplier = 1.0
-    for low, high, mult in dollar_volume_deciles:
+    dollar_volume_return = 1.0
+    for low, high, expected_return in dollar_volume_deciles:
         if low <= avg_dollar_volume < high:
-            dollar_volume_multiplier = mult
+            dollar_volume_return = expected_return
             break
 
-    share_volume_multiplier = 1.0
-    for low, high, mult in share_volume_deciles:
+    share_volume_return = 1.0
+    for low, high, expected_return in share_volume_deciles:
         if low <= avg_share_volume < high:
-            share_volume_multiplier = mult
+            share_volume_return = expected_return
             break
 
-    volume_multiplier = max(share_volume_multiplier, dollar_volume_multiplier)
+    volume_return = max(share_volume_return, dollar_volume_return)
 
-    total_edge_multiplier = round(ivrv_multiplier * ts_multiplier * volume_multiplier, 3)
+    # Calculate combined expected return additively since factors are independent
+    # Convert multipliers to profit percentages, add them, convert back to multiplier
+    ivrv_profit = ivrv_return - 1.0      # e.g., 1.0175 → 0.0175 (1.75% profit)
+    ts_profit = ts_return - 1.0          # e.g., 1.0235 → 0.0235 (2.35% profit)
+    volume_profit = volume_return - 1.0  # e.g., 1.0285 → 0.0285 (2.85% profit)
+    
+    combined_expected_return = round(1.0 + ivrv_profit + ts_profit + volume_profit, 4)
 
-    # Straddle expected pct change >= avg earnings pct change
+    # Bonus return if straddle expected move >= avg historical earnings move (last 3 years)
+    bonus_return = 0
     if expected_move_straddle >= prev_earnings_avg_abs_pct_move:
-        total_edge_multiplier += min(0.075, (expected_move_straddle - prev_earnings_avg_abs_pct_move) / prev_earnings_avg_abs_pct_move) # estimate maximum 7.5% edge
-        total_edge_multiplier = round(total_edge_multiplier, 3)  # Round again after adding bonus edge
+        bonus_return = min(0.075, (expected_move_straddle - prev_earnings_avg_abs_pct_move) / prev_earnings_avg_abs_pct_move)
+
+    final_expected_return = round(combined_expected_return + bonus_return, 4)
 
     result_summary["improved_suggestion"] = improved_suggestion
     result_summary["original_suggestion"] = original_suggestion
-    base_kelly_bet = calc_kelly_bet()
-
-    if "Recommended" in improved_suggestion:
-        adjusted_kelly_bet = round(base_kelly_bet * total_edge_multiplier, 2)
-    elif "Consider" in improved_suggestion:
-        adjusted_kelly_bet = round((base_kelly_bet * total_edge_multiplier) / 2, 2)
-    elif original_suggestion == "Consider":
-        adjusted_kelly_bet = round((base_kelly_bet * total_edge_multiplier) / 5, 2)
+    
+    # Calculate Kelly bet using actual expected return
+    if final_expected_return > 1.0:
+        # For expected value approach: bet_size = (expected_return - 1) * bankroll * kelly_fraction
+        expected_profit_rate = final_expected_return - 1.0  # e.g., 1.1252 -> 0.1252 (12.52% profit)
+        base_kelly_bet = round(expected_profit_rate * KELLY_BANKROLL * KELLY_FRACTIONAL, 3)
+        
+        # Apply tier-based multipliers to the properly calculated Kelly bet
+        if "Tier 1" in improved_suggestion:
+            adjusted_kelly_bet = round(base_kelly_bet * 1.18, 2)  # 118% of base Kelly bet
+        elif "Tier 2" in improved_suggestion:
+            adjusted_kelly_bet = round(base_kelly_bet * 1.15, 2)  # 115% of base Kelly bet
+        elif "Tier 3" in improved_suggestion:
+            adjusted_kelly_bet = round(base_kelly_bet * 1.12, 2)  # 112% of base Kelly bet
+        elif "Tier 4" in improved_suggestion:
+            adjusted_kelly_bet = round(base_kelly_bet * 1.09, 2)  # 109% of base Kelly bet
+        elif "Tier 5" in improved_suggestion:
+            adjusted_kelly_bet = round(base_kelly_bet * 1.06, 2)  # 106% of base Kelly bet
+        elif "Tier 6" in improved_suggestion:
+            adjusted_kelly_bet = round(base_kelly_bet * 1.03, 2)  # 103% of base Kelly bet
+        elif "Tier 7" in improved_suggestion:
+            adjusted_kelly_bet = round(base_kelly_bet * 1.01, 2)  # 101% of base Kelly bet
+        elif "Tier 8" in improved_suggestion or "Avoid" in improved_suggestion:
+            adjusted_kelly_bet = 0  # No bet
+        elif "Consider" in improved_suggestion:
+            adjusted_kelly_bet = round(base_kelly_bet / 2, 2)
+        elif original_suggestion == "Consider":
+            adjusted_kelly_bet = round(base_kelly_bet / 5, 2)
+        else:
+            adjusted_kelly_bet = round(base_kelly_bet, 2)
     else:
         base_kelly_bet = 0
         adjusted_kelly_bet = 0
 
     adjusted_kelly_bet = min(adjusted_kelly_bet, MAX_KELLY_BET)
     
-    result_summary["total_edge_multiplier"] = total_edge_multiplier
+    result_summary["final_expected_return"] = final_expected_return
     result_summary["base_kelly_bet"] = base_kelly_bet
     result_summary["adjusted_kelly_bet"] = adjusted_kelly_bet
 
