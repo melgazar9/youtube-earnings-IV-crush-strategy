@@ -20,7 +20,36 @@ MIN_IV30_RV30 = 1.35
 MAX_TS_SLOPE_0_45 = -0.0050
 MIN_SHARE_PRICE = 15
 EARNINGS_LOOKBACK_DAYS_FOR_AGG = 365 * 3
+MAX_KELLY_BET = 500
+
+# Kelly Criterion Parameters - Based on actual trading data
+KELLY_WIN_RATE = 0.70  # 70% win rate from actual trading
+KELLY_ODDS_DECIMAL = 1.65  # Adjusted for proper Kelly calculation (120/183.5 = 0.65, need reciprocal + 1)
+KELLY_FRACTIONAL = 0.10  # 10% fractional kelly
+KELLY_BANKROLL = 10000  # Default bankroll size
+
 PLOT_LOC = None # f"{os.path.expanduser("~/")}tmp_plots/"
+
+### Estimated higher probabilities of success by assigning tiers to criteria that's met ###
+
+TIER_1_AVG_30D_DOLLAR_VOLUME = 200_000_000
+TIER_1_IV30_RV30 = 2.0
+TIER_1_TS_SLOPE_0_45 = -0.015
+MIN_SHARE_PRICE_TIER_1 = 60
+TIER_1_MAX_SPREAD_PCT = 0.003  # % of underlying price
+
+TIER_2_AVG_30D_DOLLAR_VOLUME = 100_000_000
+TIER_2_IV30_RV30 = 1.75
+TIER_2_TS_SLOPE_0_45 = -0.01
+MIN_SHARE_PRICE_TIER_2 = 35
+TIER_2_MAX_SPREAD_PCT = 0.006  # % of underlying price
+
+TIER_3_AVG_30D_DOLLAR_VOLUME = 50_000_000
+TIER_3_IV30_RV30 = 1.5
+TIER_3_TS_SLOPE_0_45 = -0.005
+MIN_SHARE_PRICE_TIER_3 = 25
+TIER_3_MAX_SPREAD_PCT = 0.0125  # % of underlying price
+
 
 
 def filter_dates(dates):
@@ -50,7 +79,6 @@ def yang_zhang(price_data, window=30, trading_periods=252, return_last_only=True
 
     log_oc = (price_data["Open"] / price_data["Close"].shift(1)).apply(np.log)
     log_oc_sq = log_oc ** 2
-
     log_cc = (price_data["Close"] / price_data["Close"].shift(1)).apply(np.log)
     log_cc_sq = log_cc ** 2
 
@@ -61,7 +89,6 @@ def yang_zhang(price_data, window=30, trading_periods=252, return_last_only=True
     open_vol = log_oc_sq.rolling(window=window, center=False).sum() * (1.0 / (window - 1.0))
 
     window_rs = rs.rolling(window=window, center=False).sum() * (1.0 / (window - 1.0))
-
     k = 0.3333 / (1.3333 + ((window + 1) / (window - 1)))
     result = (open_vol + k * close_vol + (1 - k) * window_rs).apply(np.sqrt) * np.sqrt(trading_periods)
 
@@ -105,8 +132,12 @@ def get_current_price(df_price_history_3mo):
     return df_price_history_3mo["Close"].iloc[-1]
 
 
-def calc_kelly_bet(p_win: float = 0.66, odds_decimal: float = 1.66, current_bankroll: float = 10000,
-                   pct_kelly=0.10) -> float:
+def calc_kelly_bet(
+        p_win: float = KELLY_WIN_RATE,
+        odds_decimal: float = KELLY_ODDS_DECIMAL,
+        current_bankroll: float = KELLY_BANKROLL,
+        pct_kelly=KELLY_FRACTIONAL
+) -> float:
     """
     Calculates the Kelly Criterion optimal bet amount.
 
@@ -264,9 +295,10 @@ def _update_result_summary(
         prev_earnings_std,
         iv30_rv30,
         ts_slope_0_45,
-        avg_dollar_volume
+        avg_dollar_volume,
+        avg_share_volume
 ):
-    """Update based on estimated probabilties, done in-place """
+    """Original recommendation based on estimated probabilities (done in-place) """
     if (
             result_summary["avg_30d_dollar_volume_pass"]
             and result_summary["iv30_rv30_pass"]
@@ -282,7 +314,41 @@ def _update_result_summary(
     else:
         original_suggestion = "Avoid"
 
+
     if (
+            result_summary["avg_30d_dollar_volume"] >= TIER_1_AVG_30D_DOLLAR_VOLUME
+            and result_summary["iv30_rv30"] >= TIER_1_IV30_RV30
+            and ts_slope_0_45 <= TIER_1_TS_SLOPE_0_45
+            and result_summary["avg_30d_share_volume_pass"]
+            and result_summary["underlying_price"] >= MIN_SHARE_PRICE_TIER_1
+            and result_summary["spread_tier"] == 1
+            and result_summary["straddle_pct_move_ge_hist_pct_move_pass"]
+            and expected_move_straddle > prev_earnings_min_abs_pct_move  # safety filter - data quality check
+    ):
+        improved_suggestion = "Best Case Recommended - Tier 1"
+    elif (
+            result_summary["avg_30d_dollar_volume"] >= TIER_2_AVG_30D_DOLLAR_VOLUME
+            and result_summary["iv30_rv30"] >= TIER_2_IV30_RV30
+            and ts_slope_0_45 <= TIER_2_TS_SLOPE_0_45
+            and result_summary["avg_30d_share_volume_pass"]
+            and result_summary["underlying_price"] >= MIN_SHARE_PRICE_TIER_2
+            and result_summary["spread_tier"] <= 2
+            and result_summary["straddle_pct_move_ge_hist_pct_move_pass"]
+            and expected_move_straddle > prev_earnings_min_abs_pct_move  # safety filter - data quality check
+    ):
+        improved_suggestion = "Highly Recommended - Tier 2"
+    elif (
+            result_summary["avg_30d_dollar_volume"] >= TIER_3_AVG_30D_DOLLAR_VOLUME
+            and result_summary["iv30_rv30"] >= TIER_3_IV30_RV30
+            and ts_slope_0_45 <= TIER_3_TS_SLOPE_0_45
+            and result_summary["avg_30d_share_volume_pass"]
+            and result_summary["underlying_price"] >= MIN_SHARE_PRICE_TIER_3
+            and result_summary["spread_tier"] <= 3
+            and result_summary["straddle_pct_move_ge_hist_pct_move_pass"]
+            and expected_move_straddle > prev_earnings_min_abs_pct_move  # safety filter - data quality check
+    ):
+        improved_suggestion = "Highly Recommended - Tier 3"
+    elif (
             result_summary["avg_30d_dollar_volume_pass"]
             and result_summary["iv30_rv30_pass"]
             and result_summary["ts_slope_0_45_pass"]
@@ -291,7 +357,7 @@ def _update_result_summary(
             and result_summary["straddle_pct_move_ge_hist_pct_move_pass"]
             and expected_move_straddle > prev_earnings_min_abs_pct_move  # safety filter - data quality check
     ):
-        improved_suggestion = "Highly Recommended"
+        improved_suggestion = "Recommended - Tier 4"
     elif (
             result_summary["avg_30d_dollar_volume_pass"]
             and result_summary["iv30_rv30_pass"]
@@ -301,7 +367,7 @@ def _update_result_summary(
             and prev_earnings_avg_abs_pct_move - expected_move_straddle <= 0.75 * prev_earnings_std  # Avg move - Straddle is within 0.75 std deviations
             and expected_move_straddle > prev_earnings_min_abs_pct_move  # Safety filter - data quality check
     ):
-        improved_suggestion = "Slightly Recommended"
+        improved_suggestion = "Slightly Recommended - Tier 5"
     elif (
             result_summary["avg_30d_dollar_volume_pass"]
             and result_summary["iv30_rv30_pass"]
@@ -311,7 +377,7 @@ def _update_result_summary(
             and prev_earnings_avg_abs_pct_move - expected_move_straddle <= 0.50 * prev_earnings_std  # Avg move - Straddle is within 0.50 std deviations
             and expected_move_straddle > prev_earnings_min_abs_pct_move  # Safety filter - data quality check
     ):
-        improved_suggestion = "Recommended"
+        improved_suggestion = "Recommended - Tier 6"
     elif (result_summary["ts_slope_0_45_pass"] and result_summary["avg_30d_dollar_volume_pass"] and
           result_summary["iv30_rv30_pass"] and expected_move_straddle * 1.5 < prev_earnings_min_abs_pct_move):
         improved_suggestion = "Consider..."
@@ -322,9 +388,9 @@ def _update_result_summary(
             (result_summary["avg_30d_dollar_volume_pass"] and not result_summary["iv30_rv30_pass"])
             or (result_summary["iv30_rv30_pass"] and not result_summary["avg_30d_dollar_volume_pass"])
     ):
-        improved_suggestion = "Eh... Consider, but it's risky!"
+        improved_suggestion = "Eh... Consider, but it's risky! - Tier 7"
     else:
-        improved_suggestion = "Avoid"
+        improved_suggestion = "Avoid - Tier 8"
 
     # IV to RV ratio
     ivrv_deciles = [
@@ -380,8 +446,8 @@ def _update_result_summary(
             break
 
     share_volume_multiplier = 1.0
-    for low, high, mult in dollar_volume_deciles:
-        if low <= avg_dollar_volume < high:
+    for low, high, mult in share_volume_deciles:
+        if low <= avg_share_volume < high:
             share_volume_multiplier = mult
             break
 
@@ -392,6 +458,7 @@ def _update_result_summary(
     # Straddle expected pct change >= avg earnings pct change
     if expected_move_straddle >= prev_earnings_avg_abs_pct_move:
         total_edge_multiplier += min(0.075, (expected_move_straddle - prev_earnings_avg_abs_pct_move) / prev_earnings_avg_abs_pct_move) # estimate maximum 7.5% edge
+        total_edge_multiplier = round(total_edge_multiplier, 3)  # Round again after adding bonus edge
 
     result_summary["improved_suggestion"] = improved_suggestion
     result_summary["original_suggestion"] = original_suggestion
@@ -407,6 +474,8 @@ def _update_result_summary(
         base_kelly_bet = 0
         adjusted_kelly_bet = 0
 
+    adjusted_kelly_bet = min(adjusted_kelly_bet, MAX_KELLY_BET)
+    
     result_summary["total_edge_multiplier"] = total_edge_multiplier
     result_summary["base_kelly_bet"] = base_kelly_bet
     result_summary["adjusted_kelly_bet"] = adjusted_kelly_bet
@@ -516,7 +585,14 @@ def compute_recommendation(
 
             if call_mid is not None and put_mid is not None and call_mid != 0 and put_mid != 0:
                 straddle = call_mid + put_mid
+
+                call_spread = call_ask - call_bid
+                put_spread = put_ask - put_bid
+                total_straddle_spread = call_spread + put_spread
+                straddle_spread_pct = total_straddle_spread / underlying_price
+
             else:
+                straddle_spread_pct = 1.0  # Set high spread to fail all tier checks
                 try:
                     if call_idx + 1 < len(calls) and put_idx + 1 < len(puts):
                         warnings.warn(f"For ticker {ticker} straddle is either 0 or None from available bid/ask spread... using nearest term strikes.")
@@ -579,9 +655,13 @@ def compute_recommendation(
         "avg_30d_share_volume_pass": avg_share_volume >= min_avg_30d_share_volume,
         "iv30_rv30": round(iv30_rv30, 3),
         "iv30_rv30_pass": iv30_rv30 >= min_iv30_rv30,
-        "ts_slope_0_45": ts_slope_0_45,
+        "ts_slope_0_45": round(ts_slope_0_45, 6),
         "ts_slope_0_45_pass": ts_slope_0_45 <= max_ts_slope_0_45,
-        "underlying_price": underlying_price,
+        "underlying_price": round(underlying_price, 5),
+        "straddle_spread_pct": str(round(straddle_spread_pct * 100, 3)) + "%",
+        "spread_tier": 1 if straddle_spread_pct <= TIER_1_MAX_SPREAD_PCT else 
+                      2 if straddle_spread_pct <= TIER_2_MAX_SPREAD_PCT else
+                      3 if straddle_spread_pct <= TIER_3_MAX_SPREAD_PCT else 4,
         "call_spread": (call_bid, call_ask),
         "put_spread": (put_bid, put_ask),
         "expected_move_straddle": (expected_move_straddle * 100).round(3).astype(str) + "%",
@@ -602,7 +682,8 @@ def compute_recommendation(
         prev_earnings_std,
         iv30_rv30,
         ts_slope_0_45,
-        avg_dollar_volume
+        avg_dollar_volume,
+        avg_share_volume
     )
     return result_summary
 
