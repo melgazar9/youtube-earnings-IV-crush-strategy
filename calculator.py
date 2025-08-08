@@ -12,6 +12,15 @@ from dateutil.relativedelta import relativedelta
 
 warnings.filterwarnings("ignore", message="Not enough unique days to interpolate for ticker")
 
+### Assumptions ###
+#   - Win rate: 66%
+#   - Expectancy per trade: 0.265% ---> this implies kelly odds decimal is 1.5578
+#   - Gains: Assume average gain is 65% of the debit (not stated in the video)
+#   - Losses: Full debit + ~7.5% in commissions/slippage (estimated from the video)
+#   => Kelly Odds Decimal: ~1.65 (estimated)
+#   => Expectancy: ~6.35% per trade
+#   => Position sizing: ~1.37% of account per trade
+
 ### ------ Globals ------ ###
 
 MIN_AVG_30D_DOLLAR_VOLUME = 10_000_000
@@ -23,8 +32,8 @@ EARNINGS_LOOKBACK_DAYS_FOR_AGG = 365 * 3
 MAX_KELLY_BET = 500
 
 # Kelly Criterion Parameters - Based on actual trading data
-KELLY_WIN_RATE = 0.70  # 70% win rate from actual trading
-KELLY_ODDS_DECIMAL = 1.65  # Adjusted for proper Kelly calculation (120/183.5 = 0.65, need reciprocal + 1)
+KELLY_WIN_RATE = 0.666  # 66.6% win rate
+KELLY_ODDS_DECIMAL = 1.5055  # 0.265% expectancy per trade
 KELLY_FRACTIONAL = 0.10  # 10% fractional kelly
 KELLY_BANKROLL = 10000  # Default bankroll size
 
@@ -394,36 +403,36 @@ def _update_result_summary(
 
     # IV to RV ratio
     ivrv_deciles = [
-        (1.1789, 1.2559, 1.01),  # ~1% edge
-        (1.2559, 1.3373, 1.0175),  # ~1.75% edge
-        (1.3373, 1.4333, 1.001),  # ~0.1% edge
-        (1.4333, 1.5605, 1.0235),  # ~2.35% edge
-        (1.5605, 1.7768, 1.0265),  # ~2.65% edge
+        (1.2543, 1.3358, 1.002),  # ~0.2% edge
+        (1.3358, 1.4320, 1.003),  # ~0.3% edge
+        (1.4320, 1.5602, 1.020),  # ~2.0% edge
+        (1.5602, 1.7772, 1.033),  # ~3.3% edge
+        (1.7772, 45.5241, 1.038),  # ~3.8% edge
     ]
 
     # Term structure slope deciles with edge multipliers
     ts_deciles = [
-        (-0.8323, -0.0156, 1.125),  # 12.5% more edge
-        (-0.0156, -0.0090, 1.110),  # 11% more edge
-        (-0.0090, -0.0059, 1.075),  # 7.5% more edge
-        (-0.0059, -0.0041, 1.051),  # 5.1% more edge
-        (-0.0041, -0.0028, 1.018),  # 1.8% more edge
+        (-0.6165, -0.0125, 1.085),  # 8.5% more edge
+        (-0.0125, -0.0075, 1.060),  # 6% more edge
+        (-0.0075, -0.0051, 1.038),  # 3.8% more edge
+        (-0.0051, -0.00406, 1.085),  # 1.8% more edge
+        # (-0.0051, -0.0036, 1.085),  # 1.8% more edge
     ]
 
     # Share volume deciles with edge multipliers -- original youtube analysis
     share_volume_deciles = [
-        (1957709, 2665545, 1.0175),  # 1.75% more edge
-        (2665545, 3981270, 1.0285),  # 2.85% more edge
-        (3981270, 7222558, 1.038),  # 3.8% more edge
-        (7222558, 737093575, 1.042),  # 4.2% more edge
+        (1878818, 2536831, 1.003),  # 1.003% more edge
+        (2536831, 3749598, 1.013),  # 1.30% more edge
+        (3749598, 6743977, 1.026),  # 3.8% more edge
+        (6743977, 737093575, 1.032),  # 3.2% more edge
     ]
 
     # Attempt to map the share volume to dollar volume buckets
     dollar_volume_deciles = [
-        (5000000, 50000000, 1.0175),
-        (50000000, 200000000, 1.0285),
-        (200000000, 1000000000, 1.038),
-        (1000000000, 100000000000, 1.042),
+        (5000000, 50000000, 1.005),
+        (50000000, 200000000, 1.015),
+        (200000000, 1000000000, 1.028),
+        (1000000000, 100000000000, 1.038),
     ]
 
     ivrv_return = 1.0
