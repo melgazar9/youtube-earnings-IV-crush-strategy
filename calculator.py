@@ -296,6 +296,67 @@ def calc_prev_earnings_stats(df_history, ticker_obj, ticker, plot_loc=PLOT_LOC):
         prev_earnings_std = 0.001  # avoid division by 0 or overly tight thresholds
     return avg_abs_pct_move, median_abs_pct_move, min_abs_pct_move, max_abs_pct_move, prev_earnings_std, release_time, prev_earnings_values
 
+def _calculate_side_metrics(iv30_rv30_side, ts_slope_0_45_side, expected_move_side, prev_earnings_avg_abs_pct_move, volume_return, ivrv_deciles, ts_deciles):
+    """Calculate expected return for a specific option side (call or put)"""
+    # IV to RV ratio return
+    ivrv_return = 1.0
+    for low, high, expected_return in ivrv_deciles:
+        if low <= iv30_rv30_side < high:
+            ivrv_return = expected_return
+            break
+    
+    # Term structure return
+    ts_return = 1.0
+    for low, high, expected_return in ts_deciles:
+        if low <= ts_slope_0_45_side < high:
+            ts_return = expected_return
+            break
+    
+    # Calculate combined expected return
+    ivrv_profit = ivrv_return - 1.0
+    ts_profit = ts_return - 1.0
+    volume_profit = volume_return - 1.0
+    combined_return = round(1.0 + ivrv_profit + ts_profit + volume_profit, 4)
+    
+    # Bonus return if expected move >= avg historical earnings move
+    bonus_return = 0
+    if expected_move_side >= prev_earnings_avg_abs_pct_move:
+        bonus_return = min(0.075, (expected_move_side - prev_earnings_avg_abs_pct_move) / prev_earnings_avg_abs_pct_move)
+    
+    return round(combined_return + bonus_return, 4)
+
+def _calculate_kelly_bet(improved_suggestion, original_suggestion, final_expected_return):
+    """Calculate kelly bet based on suggestion type and expected return"""
+    # If expected return is 0 or we're avoiding, both base and adjusted should be 0
+    if final_expected_return <= 1.0 or "Tier 8" in improved_suggestion or "Avoid" in improved_suggestion:
+        return 0, 0
+    
+    expected_profit_rate = final_expected_return - 1.0
+    base_bet = round(expected_profit_rate * KELLY_BANKROLL * KELLY_FRACTIONAL, 3)
+    
+    if "Tier 1" in improved_suggestion:
+        adjusted_bet = round(base_bet * 1.18, 2)
+    elif "Tier 2" in improved_suggestion:
+        adjusted_bet = round(base_bet * 1.15, 2)
+    elif "Tier 3" in improved_suggestion:
+        adjusted_bet = round(base_bet * 1.12, 2)
+    elif "Tier 4" in improved_suggestion:
+        adjusted_bet = round(base_bet * 1.09, 2)
+    elif "Tier 5" in improved_suggestion:
+        adjusted_bet = round(base_bet * 1.06, 2)
+    elif "Tier 6" in improved_suggestion:
+        adjusted_bet = round(base_bet * 1.03, 2)
+    elif "Tier 7" in improved_suggestion:
+        adjusted_bet = round(base_bet * 1.01, 2)
+    elif "Consider" in improved_suggestion:
+        adjusted_bet = round(base_bet / 2, 2)
+    elif original_suggestion == "Consider":
+        adjusted_bet = round(base_bet / 5, 2)
+    else:
+        adjusted_bet = round(base_bet, 2)
+        
+    return base_bet, min(adjusted_bet, MAX_KELLY_BET)
+
 def _update_result_summary(
         result_summary,
         expected_move_straddle,
@@ -305,7 +366,13 @@ def _update_result_summary(
         iv30_rv30,
         ts_slope_0_45,
         avg_dollar_volume,
-        avg_share_volume
+        avg_share_volume,
+        iv30_rv30_call=None,
+        iv30_rv30_put=None,
+        ts_slope_0_45_call=None,
+        ts_slope_0_45_put=None,
+        expected_move_call=None,
+        expected_move_put=None
 ):
     """Original recommendation based on estimated probabilities (done in-place) """
     if (
@@ -326,7 +393,7 @@ def _update_result_summary(
 
     if (
             result_summary["avg_30d_dollar_volume"] >= TIER_1_AVG_30D_DOLLAR_VOLUME
-            and result_summary["iv30_rv30"] >= TIER_1_IV30_RV30
+            and result_summary["iv30_rv30_overall"] >= TIER_1_IV30_RV30
             and ts_slope_0_45 <= TIER_1_TS_SLOPE_0_45
             and result_summary["avg_30d_share_volume_pass"]
             and result_summary["underlying_price"] >= MIN_SHARE_PRICE_TIER_1
@@ -337,7 +404,7 @@ def _update_result_summary(
         improved_suggestion = "Best Case Recommended - Tier 1"
     elif (
             result_summary["avg_30d_dollar_volume"] >= TIER_2_AVG_30D_DOLLAR_VOLUME
-            and result_summary["iv30_rv30"] >= TIER_2_IV30_RV30
+            and result_summary["iv30_rv30_overall"] >= TIER_2_IV30_RV30
             and ts_slope_0_45 <= TIER_2_TS_SLOPE_0_45
             and result_summary["avg_30d_share_volume_pass"]
             and result_summary["underlying_price"] >= MIN_SHARE_PRICE_TIER_2
@@ -348,7 +415,7 @@ def _update_result_summary(
         improved_suggestion = "Highly Recommended - Tier 2"
     elif (
             result_summary["avg_30d_dollar_volume"] >= TIER_3_AVG_30D_DOLLAR_VOLUME
-            and result_summary["iv30_rv30"] >= TIER_3_IV30_RV30
+            and result_summary["iv30_rv30_overall"] >= TIER_3_IV30_RV30
             and ts_slope_0_45 <= TIER_3_TS_SLOPE_0_45
             and result_summary["avg_30d_share_volume_pass"]
             and result_summary["underlying_price"] >= MIN_SHARE_PRICE_TIER_3
@@ -476,47 +543,50 @@ def _update_result_summary(
 
     final_expected_return = round(combined_expected_return + bonus_return, 4)
 
-    result_summary["improved_suggestion"] = improved_suggestion
-    result_summary["original_suggestion"] = original_suggestion
+    # Calculate call and put side metrics if available
+    call_final_expected_return = final_expected_return
+    put_final_expected_return = final_expected_return
     
-    # Calculate Kelly bet using actual expected return
-    if final_expected_return > 1.0:
-        # For expected value approach: bet_size = (expected_return - 1) * bankroll * kelly_fraction
-        expected_profit_rate = final_expected_return - 1.0  # e.g., 1.1252 -> 0.1252 (12.52% profit)
-        base_kelly_bet = round(expected_profit_rate * KELLY_BANKROLL * KELLY_FRACTIONAL, 3)
-        
-        # Apply tier-based multipliers to the properly calculated Kelly bet
-        if "Tier 1" in improved_suggestion:
-            adjusted_kelly_bet = round(base_kelly_bet * 1.18, 2)  # 118% of base Kelly bet
-        elif "Tier 2" in improved_suggestion:
-            adjusted_kelly_bet = round(base_kelly_bet * 1.15, 2)  # 115% of base Kelly bet
-        elif "Tier 3" in improved_suggestion:
-            adjusted_kelly_bet = round(base_kelly_bet * 1.12, 2)  # 112% of base Kelly bet
-        elif "Tier 4" in improved_suggestion:
-            adjusted_kelly_bet = round(base_kelly_bet * 1.09, 2)  # 109% of base Kelly bet
-        elif "Tier 5" in improved_suggestion:
-            adjusted_kelly_bet = round(base_kelly_bet * 1.06, 2)  # 106% of base Kelly bet
-        elif "Tier 6" in improved_suggestion:
-            adjusted_kelly_bet = round(base_kelly_bet * 1.03, 2)  # 103% of base Kelly bet
-        elif "Tier 7" in improved_suggestion:
-            adjusted_kelly_bet = round(base_kelly_bet * 1.01, 2)  # 101% of base Kelly bet
-        elif "Tier 8" in improved_suggestion or "Avoid" in improved_suggestion:
-            adjusted_kelly_bet = 0  # No bet
-        elif "Consider" in improved_suggestion:
-            adjusted_kelly_bet = round(base_kelly_bet / 2, 2)
-        elif original_suggestion == "Consider":
-            adjusted_kelly_bet = round(base_kelly_bet / 5, 2)
-        else:
-            adjusted_kelly_bet = round(base_kelly_bet, 2)
-    else:
-        base_kelly_bet = 0
-        adjusted_kelly_bet = 0
-
-    adjusted_kelly_bet = min(adjusted_kelly_bet, MAX_KELLY_BET)
+    if all([iv30_rv30_call, ts_slope_0_45_call, expected_move_call]):
+        call_final_expected_return = _calculate_side_metrics(
+            iv30_rv30_call, ts_slope_0_45_call, expected_move_call, 
+            prev_earnings_avg_abs_pct_move, volume_return, ivrv_deciles, ts_deciles
+        )
+    
+    if all([iv30_rv30_put, ts_slope_0_45_put, expected_move_put]):
+        put_final_expected_return = _calculate_side_metrics(
+            iv30_rv30_put, ts_slope_0_45_put, expected_move_put, 
+            prev_earnings_avg_abs_pct_move, volume_return, ivrv_deciles, ts_deciles
+        )
+    
+    # If avoiding the trade, set expected returns to 0
+    if "Tier 8" in improved_suggestion or "Avoid" in improved_suggestion:
+        final_expected_return = 0
+        call_final_expected_return = 0
+        put_final_expected_return = 0
+    
+    # Calculate Kelly bets for overall and each side
+    base_kelly_bet, adjusted_kelly_bet = _calculate_kelly_bet(improved_suggestion, original_suggestion, final_expected_return)
+    base_kelly_bet_call, adjusted_kelly_bet_call = _calculate_kelly_bet(improved_suggestion, original_suggestion, call_final_expected_return)
+    base_kelly_bet_put, adjusted_kelly_bet_put = _calculate_kelly_bet(improved_suggestion, original_suggestion, put_final_expected_return)
+    
+    # Store all results
+    result_summary["improved_suggestion"] = improved_suggestion
+    result_summary["improved_suggestion_call"] = improved_suggestion
+    result_summary["improved_suggestion_put"] = improved_suggestion
+    result_summary["original_suggestion"] = original_suggestion
+    result_summary["original_suggestion_call"] = original_suggestion
+    result_summary["original_suggestion_put"] = original_suggestion
     
     result_summary["final_expected_return"] = final_expected_return
+    result_summary["final_expected_return_call"] = call_final_expected_return
+    result_summary["final_expected_return_put"] = put_final_expected_return
     result_summary["base_kelly_bet"] = base_kelly_bet
+    result_summary["base_kelly_bet_call"] = base_kelly_bet_call
+    result_summary["base_kelly_bet_put"] = base_kelly_bet_put
     result_summary["adjusted_kelly_bet"] = adjusted_kelly_bet
+    result_summary["adjusted_kelly_bet_call"] = adjusted_kelly_bet_call
+    result_summary["adjusted_kelly_bet_put"] = adjusted_kelly_bet_put
 
 def compute_recommendation(
         ticker,
@@ -585,6 +655,8 @@ def compute_recommendation(
         return "Error: Unable to retrieve underlying stock price."
 
     atm_iv = {}
+    atm_call_iv = {}
+    atm_put_iv = {}
     straddle = None
     i = 0
     for exp_date, chain in options_chains.items():
@@ -604,6 +676,8 @@ def compute_recommendation(
 
         atm_iv_value = (call_iv + put_iv) / 2.0
         atm_iv[exp_date] = atm_iv_value
+        atm_call_iv[exp_date] = call_iv
+        atm_put_iv[exp_date] = put_iv
 
         if i == 0:
             call_bid = calls.loc[call_idx, "bid"]
@@ -659,9 +733,32 @@ def compute_recommendation(
     if not term_spline:
         return
 
-    ts_slope_0_45 = (term_spline(45) - term_spline(dtes[0])) / (45 - dtes[0])
+    # Build separate term structures for calls and puts
+    call_dtes = []
+    call_ivs = []
+    put_dtes = []
+    put_ivs = []
+    for exp_date in atm_call_iv.keys():
+        exp_date_obj = datetime.strptime(exp_date, "%Y-%m-%d").date()
+        days_to_expiry = (exp_date_obj - today).days
+        call_dtes.append(days_to_expiry)
+        call_ivs.append(atm_call_iv[exp_date])
+        put_dtes.append(days_to_expiry)
+        put_ivs.append(atm_put_iv[exp_date])
 
-    iv30_rv30 = term_spline(30) / yang_zhang(df_price_history_3mo)
+    call_term_spline = build_term_structure(call_dtes, call_ivs)
+    put_term_spline = build_term_structure(put_dtes, put_ivs)
+    
+    # Calculate term structure slopes
+    ts_slope_0_45 = (term_spline(45) - term_spline(dtes[0])) / (45 - dtes[0])
+    ts_slope_0_45_call = (call_term_spline(45) - call_term_spline(call_dtes[0])) / (45 - call_dtes[0]) if call_term_spline else ts_slope_0_45
+    ts_slope_0_45_put = (put_term_spline(45) - put_term_spline(put_dtes[0])) / (45 - put_dtes[0]) if put_term_spline else ts_slope_0_45
+
+    # Calculate IV/RV ratios
+    rv30 = yang_zhang(df_price_history_3mo)
+    iv30_rv30 = term_spline(30) / rv30
+    iv30_rv30_call = call_term_spline(30) / rv30 if call_term_spline else iv30_rv30
+    iv30_rv30_put = put_term_spline(30) / rv30 if put_term_spline else iv30_rv30
 
     rolling_share_volume = df_price_history_3mo["Volume"].rolling(30).mean().dropna()
     rolling_dollar_volume = df_price_history_3mo["dollar_volume"].rolling(30).mean().dropna()
@@ -676,7 +773,9 @@ def compute_recommendation(
     else:
         avg_dollar_volume = rolling_dollar_volume.iloc[-1]
 
-    expected_move_straddle = (straddle / underlying_price).round(3) if straddle else None
+    expected_move_straddle = (straddle / underlying_price) if straddle else None
+    expected_move_call = (call_mid / underlying_price) if call_mid else None
+    expected_move_put = (put_mid / underlying_price) if put_mid else None
 
     (
         prev_earnings_avg_abs_pct_move, prev_earnings_median_abs_pct_move, prev_earnings_min_abs_pct_move,
@@ -691,9 +790,13 @@ def compute_recommendation(
         "avg_30d_dollar_volume_pass": avg_dollar_volume >= min_avg_30d_dollar_volume,
         "avg_30d_share_volume": round(avg_share_volume, 3),
         "avg_30d_share_volume_pass": avg_share_volume >= min_avg_30d_share_volume,
-        "iv30_rv30": round(iv30_rv30, 3),
+        "iv30_rv30_overall": round(iv30_rv30, 3),
+        "iv30_rv30_call": round(iv30_rv30_call, 3),
+        "iv30_rv30_put": round(iv30_rv30_put, 3),
         "iv30_rv30_pass": iv30_rv30 >= min_iv30_rv30,
-        "ts_slope_0_45": round(ts_slope_0_45, 6),
+        "ts_slope_0_45_overall": round(ts_slope_0_45, 6),
+        "ts_slope_0_45_call": round(ts_slope_0_45_call, 6),
+        "ts_slope_0_45_put": round(ts_slope_0_45_put, 6),
         "ts_slope_0_45_pass": ts_slope_0_45 <= max_ts_slope_0_45,
         "underlying_price": round(underlying_price, 5),
         "straddle_spread_pct": str(round(straddle_spread_pct * 100, 3)) + "%",
@@ -702,7 +805,9 @@ def compute_recommendation(
                       3 if straddle_spread_pct <= TIER_3_MAX_SPREAD_PCT else 4,
         "call_spread": (call_bid, call_ask),
         "put_spread": (put_bid, put_ask),
-        "expected_move_straddle": (expected_move_straddle * 100).round(3).astype(str) + "%",
+        "expected_pct_move_straddle": (expected_move_straddle * 100).round(3).astype(str) + "%",
+        "expected_pct_move_call": (expected_move_call * 100).round(3).astype(str) + "%" if expected_move_call else "N/A",
+        "expected_pct_move_put": (expected_move_put * 100).round(3).astype(str) + "%" if expected_move_put else "N/A",
         "straddle_pct_move_ge_hist_pct_move_pass": expected_move_straddle >= prev_earnings_avg_abs_pct_move,
         "prev_earnings_avg_abs_pct_move": str(round(prev_earnings_avg_abs_pct_move * 100, 3)) + "%",
         "prev_earnings_median_abs_pct_move": str(round(prev_earnings_median_abs_pct_move * 100, 3)) + "%",
@@ -721,7 +826,13 @@ def compute_recommendation(
         iv30_rv30,
         ts_slope_0_45,
         avg_dollar_volume,
-        avg_share_volume
+        avg_share_volume,
+        iv30_rv30_call=iv30_rv30_call,
+        iv30_rv30_put=iv30_rv30_put,
+        ts_slope_0_45_call=ts_slope_0_45_call,
+        ts_slope_0_45_put=ts_slope_0_45_put,
+        expected_move_call=expected_move_call,
+        expected_move_put=expected_move_put
     )
     return result_summary
 
