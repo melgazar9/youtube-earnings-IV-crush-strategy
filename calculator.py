@@ -278,7 +278,7 @@ def calc_prev_earnings_stats(df_history, ticker_obj, ticker, plot_loc=PLOT_LOC):
         p.update_traces(textangle=0)
         # p.show()
 
-        full_path = os.path.join(plot_loc, f"{ticker}_{df_flat["Date"].iloc[0].strftime("%Y-%m-%d")}.html")
+        full_path = os.path.join(plot_loc, f"{ticker}_{df_flat['Date'].iloc[0].strftime('%Y-%m-%d')}.html")
         os.makedirs(plot_loc, exist_ok=True)
         p.write_html(full_path)
         print(f"Saved plot for ticker {ticker} here: {full_path}")
